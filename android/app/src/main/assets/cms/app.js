@@ -44,6 +44,11 @@ const seenApkUpdateSuccessNotices = new Set();
 let currentDeviceMap = new Map();
 let selectedDeviceOrigins = new Set();
 const IS_TV_COMPACT_MODE = new URLSearchParams(window.location.search).get("tv") === "1";
+const tvPickedState = {
+  1: { count: 0, ready: false },
+  2: { count: 0, ready: false },
+  3: { count: 0, ready: false },
+};
 
 function getCurrentOrigin() {
   return window.location.origin;
@@ -324,6 +329,35 @@ function showNotice(type, title, message, durationMs = 4200) {
       if (overlay.isConnected) overlay.remove();
     }, durationMs);
   }
+}
+
+function showNoticeDialog(type, title, message) {
+  removeActiveMessageDialogs();
+  return new Promise((resolve) => {
+    let resolved = false;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      if (overlay.isConnected) overlay.remove();
+      resolve(true);
+    };
+    const { overlay } = createMessageDialog({
+      type,
+      title,
+      message,
+      closeOnBackdrop: true,
+      actions: [
+        {
+          label: "OK",
+          variant: "primary",
+          onClick: finish,
+        },
+      ],
+    });
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) finish();
+    });
+  });
 }
 
 function showConfirmDialog(title, message, confirmText = "Confirm", cancelText = "Cancel") {
@@ -2168,15 +2202,10 @@ function renderUploadSections() {
     for (let i = 1; i <= count; i++) {
       container.innerHTML += `
         <div class="upload-section-card">
-          <h3>Section ${i}</h3>
-          ${
-            IS_TV_COMPACT_MODE
-              ? `<p class="section-help tv-upload-target-note">Upload will apply to all selected TVs in the device list.</p>`
-              : ""
-          }
-          <div class="source-controls">
-            <label>Source Type</label>
-            <select id="sourceType${i}" onchange="onSectionSourceChange(${i})">
+            <h3>Section ${i}</h3>
+            <div class="source-controls">
+              <label>Source Type</label>
+              <select id="sourceType${i}" onchange="onSectionSourceChange(${i})">
             <option value="multimedia">Multimedia (Image/Video)</option>
             <option value="web">Website URL</option>
             <option value="youtube">YouTube URL</option>
@@ -2192,12 +2221,20 @@ function renderUploadSections() {
           />
         </div>
           ${
-            IS_TV_COMPACT_MODE
-              ? `
-                <div id="uploadWrap${i}" class="upload-row tv-native-upload-row">
-                  <button class="btn primary tv-upload-btn" type="button" onclick="triggerTvSectionUpload(${i})">Upload Section ${i}</button>
-                </div>
-              `
+              IS_TV_COMPACT_MODE
+                ? `
+                  <div id="uploadWrap${i}" class="tv-upload-stack">
+                    <div class="tv-upload-row">
+                      <button class="btn warning tv-section-chip" type="button" onclick="triggerTvSectionPick(${i})">S${i}</button>
+                    </div>
+                    <div class="tv-upload-row">
+                      <div id="tvPickStatus${i}" class="tv-upload-input-look">${getTvPickStatusText(i)}</div>
+                    </div>
+                    <div class="tv-upload-row">
+                      <button class="btn primary tv-upload-btn" type="button" onclick="triggerTvSectionUpload(${i})">Upload Section ${i}</button>
+                    </div>
+                  </div>
+                `
             : `
               <div id="uploadWrap${i}" class="upload-row">
                 <input
@@ -2214,6 +2251,32 @@ function renderUploadSections() {
     `;
     updateSectionUploadMode(i);
   }
+}
+
+function getTvPickStatusText(section) {
+  const state = tvPickedState[Number(section) || 1] || { count: 0, ready: false };
+  if (state.ready && state.count > 0) {
+    return `${state.count} file(s) selected. Now press Upload Section ${section}.`;
+  }
+  return `Pick files with S${section}, then upload using the button below.`;
+}
+
+function updateTvPickStatus(section) {
+  const statusEl = document.getElementById(`tvPickStatus${section}`);
+  if (statusEl) {
+    statusEl.textContent = getTvPickStatusText(section);
+  }
+}
+
+function triggerTvSectionPick(section) {
+  if (!window.ReactNativeWebView) {
+    showNotice("warning", "TV Picker Unavailable", "Native TV file picker is available only inside the TV app.", 5000);
+    return;
+  }
+  window.ReactNativeWebView.postMessage(JSON.stringify({
+    type: "TV_PICK_SECTION",
+    section: Number(section || 1),
+  }));
 }
 
 function triggerTvSectionUpload(section) {
@@ -2233,6 +2296,34 @@ function triggerTvSectionUpload(section) {
   }));
 }
 
+function handleTvNativeEvent(payload) {
+  const section = Number(payload?.section || 1);
+  if (payload?.type === "TV_PICK_COMPLETE") {
+    tvPickedState[section] = {
+      count: Number(payload?.count || 0),
+      ready: true,
+    };
+    updateTvPickStatus(section);
+    showNotice("success", "Files Selected", `${tvPickedState[section].count} file(s) selected for Section ${section}.`, 3500);
+    return;
+  }
+  if (payload?.type === "TV_PICK_FAILED") {
+    showNotice("warning", "Selection Cancelled", String(payload?.message || "File selection cancelled."), 4500);
+    return;
+  }
+  if (payload?.type === "TV_UPLOAD_COMPLETE") {
+    tvPickedState[section] = { count: 0, ready: false };
+    updateTvPickStatus(section);
+    showNotice("success", "Upload Complete", `${Number(payload?.count || 0)} file(s) uploaded to Section ${section}.`, 4000);
+    return;
+  }
+  if (payload?.type === "TV_UPLOAD_FAILED") {
+    showNotice("error", "Upload Failed", String(payload?.message || "Unable to upload picked files."), 6000);
+  }
+}
+
+window.handleTvNativeEvent = handleTvNativeEvent;
+window.triggerTvSectionPick = triggerTvSectionPick;
 window.triggerTvSectionUpload = triggerTvSectionUpload;
 
 function selectGrid3Layout(layoutId) {
@@ -2245,9 +2336,6 @@ function selectGrid3Layout(layoutId) {
 }
 
 async function loadDevices() {
-  const res = await fetch("/devices");
-  const devices = await res.json();
-
   const select = document.getElementById("deviceSelect");
   const previousSelected = new Set(selectedDeviceOrigins);
   select.innerHTML = "";
@@ -2258,7 +2346,28 @@ async function loadDevices() {
   allOption.textContent = "All Devices";
   select.appendChild(allOption);
 
-  (Array.isArray(devices) ? devices : []).forEach((d) => {
+  let devices = [];
+  try {
+    const res = await fetch("/devices");
+    devices = await res.json();
+  } catch (_e) {
+    devices = [];
+  }
+
+  const normalizedDevices = Array.isArray(devices) ? devices.slice() : [];
+  if (!normalizedDevices.length) {
+    normalizedDevices.push({
+      name: "This TV",
+      deviceId: "local-tv",
+      ip: window.location.hostname || "127.0.0.1",
+      localUrl: getCurrentOrigin(),
+      publicUrl: getCurrentOrigin(),
+      origin: getCurrentOrigin(),
+      online: true,
+    });
+  }
+
+  normalizedDevices.forEach((d) => {
     const value = getDeviceOptionValue(d);
     if (!value) return;
     currentDeviceMap.set(value, {
@@ -2502,7 +2611,7 @@ async function saveConfig() {
     return;
   }
 
-  showNotice("success", "Settings Saved", "Configuration has been applied successfully.");
+  await showNoticeDialog("success", "Settings Saved", "Configuration has been applied successfully.");
 
   if (window.ReactNativeWebView) {
     window.ReactNativeWebView.postMessage("CONFIG_SAVED");
@@ -2660,30 +2769,10 @@ window.uploadAndInstallAppUpdate = uploadAndInstallAppUpdate;
 window.toggleDeviceDashboard = toggleDeviceDashboard;
 window.selectDeviceFromDashboard = selectDeviceFromDashboard;
 
-document.addEventListener("DOMContentLoaded", async () => {
-  if (IS_TV_COMPACT_MODE) {
-    document.body.classList.add("tv-compact-mode");
-    const leftCol = document.querySelector(".left-col");
-    const rightCol = document.querySelector(".right-col");
-    const uploadWrap = document.getElementById("uploadSections");
-    if (uploadWrap) {
-      const hint = document.createElement("div");
-      hint.className = "tv-upload-hint";
-      hint.textContent = "Select devices below, then upload section-wise from these buttons. Save closes the TV CMS after settings are applied.";
-      uploadWrap.parentElement?.insertBefore(hint, uploadWrap);
+  document.addEventListener("DOMContentLoaded", async () => {
+    if (IS_TV_COMPACT_MODE) {
+      document.body.classList.add("tv-compact-mode");
     }
-    const dashboardBtn = document.querySelector(".device-toolbar .btn");
-    if (dashboardBtn) {
-      dashboardBtn.classList.add("hidden");
-    }
-    if (rightCol) {
-      rightCol.classList.add("hidden");
-    }
-    const dashboardOverlay = document.getElementById("deviceDashboardOverlay");
-    if (dashboardOverlay) {
-      dashboardOverlay.classList.add("hidden");
-    }
-  }
 
   renderGrid3LayoutOptions();
   updateScheduleFallbackVisibility();

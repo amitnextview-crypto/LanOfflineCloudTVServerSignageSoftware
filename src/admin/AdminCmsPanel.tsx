@@ -11,9 +11,10 @@ import { WebView } from "react-native-webview";
 import CmsAccessCard from "./CmsAccessCard";
 import {
   getCmsAccessInfo,
-  pickAndUploadMediaFiles,
+  pickMediaFilesForSection,
   setAutoReopenEnabled,
   startEmbeddedCmsServer,
+  uploadPickedMediaFiles,
 } from "../services/embeddedCmsService";
 
 type Props = {
@@ -24,6 +25,7 @@ type Props = {
 
 export default function AdminCmsPanel({ visible, onClose, initialView = "access" }: Props) {
   const slide = useRef(new Animated.Value(400)).current;
+  const webRef = useRef<WebView>(null);
   const [cmsUrl, setCmsUrl] = useState("http://127.0.0.1:8080");
   const [currentView, setCurrentView] = useState<"access" | "cms">(initialView);
   const [backFocused, setBackFocused] = useState(false);
@@ -74,12 +76,46 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
 
   const nativeTvCmsUrl = `${cmsUrl}${cmsUrl.includes("?") ? "&" : "?"}tv=1`;
 
+  const postWebEvent = (type: string, payload: Record<string, any>) => {
+    const script = `
+      if (window.handleTvNativeEvent) {
+        window.handleTvNativeEvent(${JSON.stringify({ type, ...payload })});
+      }
+      true;
+    `;
+    webRef.current?.injectJavaScript(script);
+  };
+
+  const handleNativePick = async (section: number) => {
+    try {
+      setAutoReopenEnabled(false);
+      const result: any = await pickMediaFilesForSection(section);
+      postWebEvent("TV_PICK_COMPLETE", {
+        section,
+        count: Number(result?.count || 0),
+      });
+    } catch (error: any) {
+      postWebEvent("TV_PICK_FAILED", {
+        section,
+        message: String(error?.message || "File selection cancelled."),
+      });
+    }
+  };
+
   const handleNativeUpload = async (section: number, targets: string[] = [cmsUrl]) => {
     try {
       setAutoReopenEnabled(false);
-      await pickAndUploadMediaFiles(section, targets);
+      const result: any = await uploadPickedMediaFiles(section, targets);
+      postWebEvent("TV_UPLOAD_COMPLETE", {
+        section,
+        count: Number(result?.count || 0),
+      });
       setWebReloadKey((value) => value + 1);
-    } catch (_e) {
+    } catch (error: any) {
+      postWebEvent("TV_UPLOAD_FAILED", {
+        section,
+        message: String(error?.message || "Upload failed."),
+      });
     }
   };
 
@@ -90,7 +126,7 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
           <View style={styles.header}>
             <View style={styles.headerCopy}>
               <Text style={styles.title}>CMS</Text>
-              <Text style={styles.subtitle}>TV mode uses native upload buttons inside each section.</Text>
+              <Text style={styles.subtitle}>TV CMS mirrors browser features and uses the native TV picker for uploads.</Text>
             </View>
             <TouchableOpacity
               onPress={() => {
@@ -101,18 +137,19 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
               onBlur={() => setBackFocused(false)}
               activeOpacity={0.8}
               style={[
-                styles.backBtn,
-                backFocused ? styles.backBtnActive : null,
+                styles.iconBtn,
+                backFocused ? styles.iconBtnActive : null,
               ]}
               focusable
               accessible
               hasTVPreferredFocus
             >
-              <Text style={styles.backBtnText}>Back</Text>
+              <Text style={styles.iconBtnText}>Back</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.webWrapFullscreen}>
             <WebView
+              ref={webRef}
               key={`tv-cms-${webReloadKey}`}
               source={{ uri: nativeTvCmsUrl }}
               style={styles.webview}
@@ -138,6 +175,11 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
                   parsed = null;
                 }
                 const match = raw.match(/^TV_UPLOAD_SECTION:(\d+)$/);
+                if (parsed?.type === "TV_PICK_SECTION") {
+                  const section = Number(parsed?.section || 1);
+                  handleNativePick(section);
+                  return;
+                }
                 if (parsed?.type === "TV_UPLOAD_SECTION") {
                   const section = Number(parsed?.section || 1);
                   const targets = Array.isArray(parsed?.targets)
@@ -161,12 +203,23 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
       ) : (
         <>
           <View style={styles.header}>
-            <View>
+            <View style={styles.headerCopy}>
               <Text style={styles.title}>Admin Panel</Text>
               <Text style={styles.subtitle}>TV-hosted CMS is running locally.</Text>
             </View>
-            <TouchableOpacity onPress={onClose}>
-              <Text style={styles.close}>X</Text>
+            <TouchableOpacity
+              onPress={onClose}
+              onFocus={() => setBackFocused(true)}
+              onBlur={() => setBackFocused(false)}
+              activeOpacity={0.8}
+              style={[
+                styles.iconBtn,
+                backFocused ? styles.iconBtnActive : null,
+              ]}
+              focusable
+              accessible
+            >
+              <Text style={styles.iconBtnText}>X</Text>
             </TouchableOpacity>
           </View>
 
@@ -212,11 +265,6 @@ const styles = StyleSheet.create({
     color: "rgba(212,225,238,0.7)",
     fontSize: 11,
   },
-  close: {
-    color: "#fff",
-    fontSize: 22,
-    fontWeight: "700",
-  },
   content: {
     flex: 1,
     padding: 12,
@@ -244,8 +292,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#0f141c",
   },
-  backBtn: {
-    minWidth: 74,
+  iconBtn: {
+    minWidth: 54,
+    minHeight: 46,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#1d8fff",
@@ -255,11 +304,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(29, 143, 255, 0.4)",
   },
-  backBtnActive: {
+  iconBtnActive: {
     backgroundColor: "#43a6ff",
     borderColor: "#9ad0ff",
   },
-  backBtnText: {
+  iconBtnText: {
     color: "#fff",
     fontSize: 14,
     fontWeight: "700",

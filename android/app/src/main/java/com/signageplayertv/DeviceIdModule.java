@@ -29,8 +29,10 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
@@ -55,7 +57,7 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
     private final ReactApplicationContext reactContext;
     private Promise pendingMediaPickerPromise;
     private int pendingUploadSection = 1;
-    private String pendingUploadTargetsJson = "[]";
+    private final Map<Integer, List<SelectedUploadFile>> stagedMediaBySection = new HashMap<>();
 
     DeviceIdModule(ReactApplicationContext context) {
         super(context);
@@ -385,7 +387,7 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
     }
 
     @ReactMethod
-    public void pickAndUploadMediaFiles(double sectionValue, String targetOriginsJson, Promise promise) {
+    public void pickMediaFilesForSection(double sectionValue, Promise promise) {
         try {
             if (pendingMediaPickerPromise != null) {
                 promise.reject("picker_busy", "Another file picker request is already running.");
@@ -400,7 +402,6 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
 
             int section = (int) Math.max(1, Math.min(3, Math.round(sectionValue)));
             pendingUploadSection = section;
-            pendingUploadTargetsJson = targetOriginsJson == null ? "[]" : targetOriginsJson;
             pendingMediaPickerPromise = promise;
 
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -568,13 +569,34 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
                 promise.reject("no_valid_files", "No supported files were selected.");
                 return;
             }
+            stagedMediaBySection.put(pendingUploadSection, pickedFiles);
 
-            List<String> targetOrigins = parseTargetOrigins(pendingUploadTargetsJson);
+            WritableMap out = Arguments.createMap();
+            out.putBoolean("success", true);
+            out.putInt("section", pendingUploadSection);
+            out.putInt("count", pickedFiles.size());
+            promise.resolve(out);
+        } catch (Exception e) {
+            promise.reject("picker_failed", String.valueOf(e.getMessage()));
+        }
+    }
+
+    @ReactMethod
+    public void uploadPickedMediaFiles(double sectionValue, String targetOriginsJson, Promise promise) {
+        try {
+            int section = (int) Math.max(1, Math.min(3, Math.round(sectionValue)));
+            List<SelectedUploadFile> staged = stagedMediaBySection.get(section);
+            if (staged == null || staged.isEmpty()) {
+                promise.reject("no_files_picked", "Pick files first using the section button.");
+                return;
+            }
+
+            List<String> targetOrigins = parseTargetOrigins(targetOriginsJson);
             if (targetOrigins.isEmpty()) {
                 targetOrigins.add("http://127.0.0.1:8080");
             }
             for (String origin : targetOrigins) {
-                uploadFilesToOrigin(origin, pendingUploadSection, pickedFiles);
+                uploadFilesToOrigin(origin, section, staged);
             }
 
             try {
@@ -583,14 +605,16 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
             }
 
             JSONObject payload = new JSONObject();
-            payload.put("section", pendingUploadSection);
-            payload.put("count", pickedFiles.size());
+            payload.put("section", section);
+            payload.put("count", staged.size());
             EmbeddedCmsRuntime.emitEvent("media-updated", payload);
+
+            stagedMediaBySection.remove(section);
 
             WritableMap out = Arguments.createMap();
             out.putBoolean("success", true);
-            out.putInt("section", pendingUploadSection);
-            out.putInt("count", pickedFiles.size());
+            out.putInt("section", section);
+            out.putInt("count", staged.size());
             out.putInt("targets", targetOrigins.size());
             promise.resolve(out);
         } catch (Exception e) {

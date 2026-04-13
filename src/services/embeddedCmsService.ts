@@ -67,11 +67,18 @@ export function setEmbeddedRuntimeInfo(payload: Record<string, any>) {
   }
 }
 
-export async function pickAndUploadMediaFiles(section: number, targetOrigins: string[] = []) {
-  if (!DeviceIdModule?.pickAndUploadMediaFiles) {
+export async function pickMediaFilesForSection(section: number) {
+  if (!DeviceIdModule?.pickMediaFilesForSection) {
     throw new Error("TV media picker is not available.");
   }
-  return DeviceIdModule.pickAndUploadMediaFiles(
+  return DeviceIdModule.pickMediaFilesForSection(Number(section || 1));
+}
+
+export async function uploadPickedMediaFiles(section: number, targetOrigins: string[] = []) {
+  if (!DeviceIdModule?.uploadPickedMediaFiles) {
+    throw new Error("TV media upload is not available.");
+  }
+  return DeviceIdModule.uploadPickedMediaFiles(
     Number(section || 1),
     JSON.stringify(Array.isArray(targetOrigins) ? targetOrigins : [])
   );
