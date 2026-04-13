@@ -20,16 +20,19 @@ import java.util.concurrent.Executors;
 public final class TvDiscoveryManager {
     private static final String SERVICE_TYPE = "_tv._tcp.";
     private static final long DISCOVERY_STALE_MS = 30000L;
+    private static final long SUBNET_PROBE_INTERVAL_MS = 15000L;
     private static final int[] FALLBACK_SCAN_PORTS = new int[]{8080, 8081, 9090, 10080};
 
     private final Context context;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService executor = Executors.newFixedThreadPool(24);
     private final Map<String, JSONObject> discoveredByIp = new ConcurrentHashMap<>();
 
     private NsdManager nsdManager;
     private NsdManager.RegistrationListener registrationListener;
     private NsdManager.DiscoveryListener discoveryListener;
     private boolean started = false;
+    private volatile long lastSubnetProbeAt = 0L;
+    private volatile boolean subnetProbeRunning = false;
 
     public TvDiscoveryManager(Context context) {
         this.context = context.getApplicationContext();
@@ -42,7 +45,7 @@ public final class TvDiscoveryManager {
         started = true;
         registerService();
         discoverServices();
-        probeLocalSubnet();
+        probeLocalSubnet(true);
     }
 
     public synchronized void restartAdvertising() {
@@ -54,10 +57,15 @@ public final class TvDiscoveryManager {
         } catch (Exception ignored) {
         }
         registerService();
-        probeLocalSubnet();
+        probeLocalSubnet(true);
     }
 
-    private void probeLocalSubnet() {
+    private void probeLocalSubnet(boolean force) {
+        if (subnetProbeRunning) return;
+        long now = System.currentTimeMillis();
+        if (!force && now - lastSubnetProbeAt < SUBNET_PROBE_INTERVAL_MS) return;
+        subnetProbeRunning = true;
+        lastSubnetProbeAt = now;
         executor.execute(() -> {
             try {
                 String ip = EmbeddedCmsRuntime.getIpAddress(context);
@@ -78,6 +86,8 @@ public final class TvDiscoveryManager {
                     }
                 }
             } catch (Exception ignored) {
+            } finally {
+                subnetProbeRunning = false;
             }
         });
     }
@@ -227,6 +237,7 @@ public final class TvDiscoveryManager {
     }
 
     public JSONArray getDiscoveredDevices() {
+        probeLocalSubnet(false);
         JSONArray out = new JSONArray();
         for (JSONObject value : discoveredByIp.values()) {
             long lastSeen = value.optLong("lastSeen", 0L);

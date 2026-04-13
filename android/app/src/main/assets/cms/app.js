@@ -10,6 +10,8 @@ const MAX_FILES_PER_UPLOAD = 120;
 const HARD_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
 const WARN_FILE_SIZE_BYTES = 700 * 1024 * 1024;
 const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+const MULTI_DEVICE_UPLOAD_RETRIES = 2;
+const MULTI_DEVICE_RETRY_DELAY_MS = 1800;
 
 const GRID3_LAYOUTS = [
   { id: "stack-v", label: "Stack Vertical" },
@@ -112,9 +114,12 @@ function upsertDiscoveredDevices(devices = []) {
 async function probeDeviceOrigin(origin) {
   const normalized = normalizeOrigin(origin);
   if (!normalized) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 900);
   try {
     const res = await fetch(`${normalized}/status?ts=${Date.now()}`, {
       cache: "no-store",
+      signal: controller.signal,
     });
     if (!res.ok) return null;
     const status = await res.json();
@@ -127,6 +132,8 @@ async function probeDeviceOrigin(origin) {
     };
   } catch (_e) {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -154,8 +161,8 @@ async function scanSubnetForDevices() {
         }
       }
 
-      for (let i = 0; i < candidates.length; i += 18) {
-        const batch = candidates.slice(i, i + 18);
+      for (let i = 0; i < candidates.length; i += 48) {
+        const batch = candidates.slice(i, i + 48);
         const results = await Promise.all(batch.map((origin) => probeDeviceOrigin(origin)));
         const found = results.filter(Boolean);
         if (found.length) {
@@ -617,6 +624,73 @@ function uploadWithProgress(url, formData, onProgress) {
     xhr.ontimeout = () => reject(new Error("Upload timed out while waiting for server response"));
     xhr.send(formData);
   });
+}
+
+function createAggregateProgressTracker(totalTargets, section) {
+  const safeTotal = Math.max(1, Number(totalTargets || 1));
+  const perTarget = Array.from({ length: safeTotal }, () => 0);
+  let lastRendered = 0;
+
+  const render = () => {
+    const completed = perTarget.filter((value) => value >= 100).length;
+    const rawAverage = perTarget.reduce((sum, value) => sum + Number(value || 0), 0) / safeTotal;
+    const smoothPercent = Math.max(lastRendered, Math.min(99, Math.round(rawAverage)));
+    lastRendered = smoothPercent;
+    updateUploadProgress(
+      smoothPercent,
+      completed >= safeTotal
+        ? `Finalizing section ${section} on all ${safeTotal} devices...`
+        : `Uploading section ${section} to ${safeTotal} devices... ${completed}/${safeTotal} done`
+    );
+  };
+
+  return {
+    setProgress(targetIndex, percent) {
+      const safeIndex = Number(targetIndex || 0);
+      if (safeIndex < 0 || safeIndex >= perTarget.length) return;
+      perTarget[safeIndex] = Math.max(perTarget[safeIndex], Math.max(0, Math.min(100, Number(percent || 0))));
+      render();
+    },
+    markComplete(targetIndex) {
+      this.setProgress(targetIndex, 100);
+    },
+    markRetry(targetIndex, attempt) {
+      const safeIndex = Number(targetIndex || 0);
+      if (safeIndex < 0 || safeIndex >= perTarget.length) return;
+      updateUploadProgress(
+        Math.max(lastRendered, 2),
+        `Retrying upload for device ${safeIndex + 1}/${safeTotal} (attempt ${attempt + 1})...`
+      );
+    },
+    finish() {
+      lastRendered = 100;
+      updateUploadProgress(100, `Upload complete on ${safeTotal} device${safeTotal === 1 ? "" : "s"}`);
+    },
+  };
+}
+
+async function uploadToOriginWithRetry(origin, section, buildFormData, tracker, targetIndex) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= MULTI_DEVICE_UPLOAD_RETRIES; attempt += 1) {
+    try {
+      if (attempt > 0) {
+        tracker.markRetry(targetIndex, attempt);
+      }
+      const formData = buildFormData();
+      await uploadWithProgress(`${origin}/upload?section=${encodeURIComponent(section)}`, formData, (percent) => {
+        tracker.setProgress(targetIndex, percent);
+      });
+      tracker.markComplete(targetIndex);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < MULTI_DEVICE_UPLOAD_RETRIES) {
+        await wait(MULTI_DEVICE_RETRY_DELAY_MS * (attempt + 1));
+        continue;
+      }
+    }
+  }
+  throw lastError || new Error("Upload failed");
 }
 
 function wait(ms) {
@@ -2638,20 +2712,28 @@ async function uploadMedia(section) {
 
     updateUploadProgress(
       0,
-      `Uploading ${uploadFiles.length} file(s), ${formatBytes(totalSize)}`
+      `Uploading ${uploadFiles.length} file(s), ${formatBytes(totalSize)} to ${deviceOrigins.length} device${deviceOrigins.length === 1 ? "" : "s"}`
     );
 
-    await Promise.all(deviceOrigins.map((origin, idx) => {
-      const deviceFormData = cloneUploadFormData(uploadFiles, containsPpt);
-      return uploadWithProgress(`${origin}/upload?section=${encodeURIComponent(section)}`, deviceFormData, (percent) => {
-        updateUploadProgress(percent, `Uploading section ${section} to device ${idx + 1} of ${deviceOrigins.length}...`);
-      });
-    }));
+    const tracker = createAggregateProgressTracker(deviceOrigins.length, section);
+    const uploadResults = await Promise.allSettled(deviceOrigins.map((origin, idx) =>
+      uploadToOriginWithRetry(
+        origin,
+        section,
+        () => cloneUploadFormData(uploadFiles, containsPpt),
+        tracker,
+        idx
+      )
+    ));
+    const failedResult = uploadResults.find((result) => result.status === "rejected");
+    if (failedResult) {
+      throw failedResult.reason || new Error("Upload failed");
+    }
 
     await loadPreviewMediaSection(primaryOrigin, section);
     renderScreenPreview();
 
-    updateUploadProgress(100, "Upload complete");
+    tracker.finish();
     showNotice("success", "Upload Complete", "Media uploaded successfully.");
   } catch (err) {
     const rawMessage = String(err?.message || "Unknown error");
