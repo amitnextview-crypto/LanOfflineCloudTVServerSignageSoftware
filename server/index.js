@@ -302,6 +302,7 @@ const deviceStatus = {};
 const socketToDevice = {};
 global.connectedDevices = connectedDevices;
 global.deviceStatus = deviceStatus;
+const DEVICE_ONLINE_TTL_MS = 45000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -342,6 +343,21 @@ function appendDeviceEvent(deviceId, type, message) {
     },
   ].slice(-20);
   upsertDeviceStatus(deviceId, { recentEvents: nextEvents });
+}
+
+function isSocketStillConnected(socketId) {
+  if (!socketId) return false;
+  return !!io.sockets.sockets.get(socketId);
+}
+
+function isDeviceActivelyOnline(deviceId) {
+  const socketId = connectedDevices[deviceId];
+  if (!isSocketStillConnected(socketId)) return false;
+  const status = deviceStatus[deviceId];
+  if (!status?.lastSeen) return true;
+  const lastSeenMs = Date.parse(status.lastSeen);
+  if (!Number.isFinite(lastSeenMs)) return true;
+  return Date.now() - lastSeenMs <= DEVICE_ONLINE_TTL_MS;
 }
 
 io.on("connection", (socket) => {
@@ -419,7 +435,8 @@ io.on("connection", (socket) => {
 // Connected device IDs
 app.get("/devices", (req, res) => {
   if (!isApiAuthed(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
-  res.json(Object.keys(connectedDevices));
+  const liveDevices = Object.keys(connectedDevices).filter((deviceId) => isDeviceActivelyOnline(deviceId));
+  res.json(liveDevices);
 });
 
 // Live health/error status for CMS
@@ -428,7 +445,7 @@ app.get("/device-status", (req, res) => {
   const list = Object.values(deviceStatus)
     .map((item) => ({
       ...item,
-      online: !!connectedDevices[item.deviceId],
+      online: isDeviceActivelyOnline(item.deviceId),
     }))
     .sort((a, b) => {
       if (a.online !== b.online) return a.online ? -1 : 1;

@@ -9,6 +9,7 @@ const PPTX_RENDER_DPR = 1;
 const MAX_FILES_PER_UPLOAD = 120;
 const HARD_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
 const WARN_FILE_SIZE_BYTES = 700 * 1024 * 1024;
+const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 
 const GRID3_LAYOUTS = [
   { id: "stack-v", label: "Stack Vertical" },
@@ -278,6 +279,7 @@ function uploadWithProgress(url, formData, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url, true);
+    xhr.timeout = UPLOAD_TIMEOUT_MS;
 
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
@@ -294,8 +296,41 @@ function uploadWithProgress(url, formData, onProgress) {
     };
 
     xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.ontimeout = () => reject(new Error("Upload timed out while waiting for server response"));
     xhr.send(formData);
   });
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function verifyUploadedFilesOnOrigin(origin, section, uploadFiles, retries = 8, delayMs = 2500) {
+  const expectedNames = uploadFiles
+    .map((file) => String(file?.name || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (!expectedNames.length) return false;
+
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    try {
+      const res = await fetch(`${origin}/media-list?ts=${Date.now()}`);
+      const files = await res.json();
+      const existing = new Set(
+        (Array.isArray(files) ? files : [])
+          .filter((item) => Number(item?.section || 0) === Number(section))
+          .map((item) => String(item?.originalName || item?.name || "").trim().toLowerCase())
+          .filter(Boolean)
+      );
+      if (expectedNames.every((name) => existing.has(name))) {
+        return true;
+      }
+    } catch (_e) {
+    }
+    if (attempt < retries - 1) {
+      await wait(delayMs);
+    }
+  }
+  return false;
 }
 
 function parseUploadErrorResponse(status, responseText) {
@@ -1537,6 +1572,39 @@ async function loadPreviewMedia(deviceId) {
   }
 }
 
+async function loadPreviewMediaSection(deviceId, sectionNumber) {
+  const safeSection = Number(sectionNumber || 0);
+  if (!safeSection || safeSection < 1 || safeSection > 3) {
+    await loadPreviewMedia(deviceId);
+    return;
+  }
+  try {
+    const res = await fetch(`/media-list?deviceId=${deviceId}&ts=${Date.now()}`);
+    const files = await res.json();
+    const nextSection = [];
+    for (const file of files) {
+      const sec = Number(file.section || 1);
+      if (sec !== safeSection) continue;
+      nextSection.push({
+        ...file,
+        remoteUrl: file.url,
+      });
+    }
+    previewMediaBySection = {
+      ...previewMediaBySection,
+      [safeSection]: nextSection,
+    };
+    resetPreviewState();
+  } catch (e) {
+    console.log("Preview section load failed", e);
+    previewMediaBySection = {
+      ...previewMediaBySection,
+      [safeSection]: [],
+    };
+    resetPreviewState();
+  }
+}
+
 function startPreviewPolling() {
   if (previewPollTimer) {
     clearInterval(previewPollTimer);
@@ -1544,7 +1612,7 @@ function startPreviewPolling() {
 
   previewPollTimer = setInterval(async () => {
     const deviceId = document.getElementById("deviceSelect")?.value || "all";
-    await loadPreviewMedia(deviceId);
+    await loadPreviewMediaSection(deviceId, section);
     renderScreenPreview();
   }, 15000);
 }
@@ -2048,6 +2116,7 @@ async function uploadMedia(section) {
     if (!proceed) return;
   }
 
+  let uploadFiles = [...validFiles];
   try {
     loader.classList.remove("hidden");
     updateUploadProgress(0, "Preparing upload...");
@@ -2077,8 +2146,6 @@ async function uploadMedia(section) {
         return;
       }
     }
-
-    let uploadFiles = [...validFiles];
 
     const legacyPpt = uploadFiles.filter((f) => PPT_LEGACY_EXT.test(f.name || ""));
     if (legacyPpt.length) {
@@ -2144,6 +2211,17 @@ async function uploadMedia(section) {
     showNotice("success", "Upload Complete", "Media uploaded successfully.");
   } catch (err) {
     const rawMessage = String(err?.message || "Unknown error");
+    if (/network error during upload|upload timed out/i.test(rawMessage) && uploadFiles.length) {
+      updateUploadProgress(96, "Upload connection interrupted. Verifying saved media...");
+      const recovered = await verifyUploadedFilesOnOrigin(deviceId, section, uploadFiles);
+      if (recovered) {
+        await loadPreviewMediaSection(deviceId, section);
+        renderScreenPreview();
+        updateUploadProgress(100, "Upload complete");
+        showNotice("success", "Upload Complete", "Media uploaded successfully.");
+        return;
+      }
+    }
     const message = /pdf engine/i.test(rawMessage)
       ? `${rawMessage}\n\nPDF uploads require conversion on the CMS page before sending to devices.`
       : /pptx|powerpoint/i.test(rawMessage)

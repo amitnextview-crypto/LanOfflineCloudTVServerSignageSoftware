@@ -736,7 +736,7 @@ router.post("/:deviceId/section/:section", (req, res) => {
         );
 
         if (global.io) {
-          const syncAt = Date.now() + 3000;
+          const syncAt = Date.now() + 500;
           const timeline = updateSectionTimeline(deviceId, section, {
             targetDevice: deviceId,
             syncAt,

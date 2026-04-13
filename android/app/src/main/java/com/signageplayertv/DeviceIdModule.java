@@ -33,6 +33,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
@@ -583,43 +586,59 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
 
     @ReactMethod
     public void uploadPickedMediaFiles(double sectionValue, String targetOriginsJson, Promise promise) {
-        try {
-            int section = (int) Math.max(1, Math.min(3, Math.round(sectionValue)));
-            List<SelectedUploadFile> staged = stagedMediaBySection.get(section);
-            if (staged == null || staged.isEmpty()) {
-                promise.reject("no_files_picked", "Pick files first using the section button.");
-                return;
-            }
-
-            List<String> targetOrigins = parseTargetOrigins(targetOriginsJson);
-            if (targetOrigins.isEmpty()) {
-                targetOrigins.add("http://127.0.0.1:8080");
-            }
-            for (String origin : targetOrigins) {
-                uploadFilesToOrigin(origin, section, staged);
-            }
-
-            try {
-                NativeVideoPlayerView.clearVideoCache(reactContext.getApplicationContext());
-            } catch (Exception ignored) {
-            }
-
-            JSONObject payload = new JSONObject();
-            payload.put("section", section);
-            payload.put("count", staged.size());
-            EmbeddedCmsRuntime.emitEvent("media-updated", payload);
-
-            stagedMediaBySection.remove(section);
-
-            WritableMap out = Arguments.createMap();
-            out.putBoolean("success", true);
-            out.putInt("section", section);
-            out.putInt("count", staged.size());
-            out.putInt("targets", targetOrigins.size());
-            promise.resolve(out);
-        } catch (Exception e) {
-            promise.reject("upload_failed", String.valueOf(e.getMessage()));
+        int section = (int) Math.max(1, Math.min(3, Math.round(sectionValue)));
+        List<SelectedUploadFile> staged = stagedMediaBySection.get(section);
+        if (staged == null || staged.isEmpty()) {
+            promise.reject("no_files_picked", "Pick files first using the section button.");
+            return;
         }
+
+        List<String> targetOrigins = parseTargetOrigins(targetOriginsJson);
+        if (targetOrigins.isEmpty()) {
+            targetOrigins.add(EmbeddedCmsRuntime.getLocalUrl());
+        }
+
+        final List<SelectedUploadFile> uploadFiles = new ArrayList<>(staged);
+        final List<String> uploadTargets = new ArrayList<>(targetOrigins);
+
+        new Thread(() -> {
+            ExecutorService executor = Executors.newFixedThreadPool(Math.max(1, Math.min(4, uploadTargets.size())));
+            try {
+                List<Future<?>> futures = new ArrayList<>();
+                for (String origin : uploadTargets) {
+                    futures.add(executor.submit(() -> {
+                        uploadFilesToOrigin(origin, section, uploadFiles);
+                        return null;
+                    }));
+                }
+                for (Future<?> future : futures) {
+                    future.get();
+                }
+
+                try {
+                    NativeVideoPlayerView.clearVideoCache(reactContext.getApplicationContext());
+                } catch (Exception ignored) {
+                }
+
+                JSONObject payload = new JSONObject();
+                payload.put("section", section);
+                payload.put("count", uploadFiles.size());
+                EmbeddedCmsRuntime.emitEvent("media-updated", payload);
+
+                stagedMediaBySection.remove(section);
+
+                WritableMap out = Arguments.createMap();
+                out.putBoolean("success", true);
+                out.putInt("section", section);
+                out.putInt("count", uploadFiles.size());
+                out.putInt("targets", uploadTargets.size());
+                promise.resolve(out);
+            } catch (Exception e) {
+                promise.reject("upload_failed", String.valueOf(e.getMessage()));
+            } finally {
+                executor.shutdownNow();
+            }
+        }).start();
     }
 
     @Override
@@ -666,11 +685,12 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
             URL url = new URL(safeOrigin + "/upload?section=" + section);
             connection = (HttpURLConnection) url.openConnection();
             connection.setConnectTimeout(20000);
-            connection.setReadTimeout(120000);
+            connection.setReadTimeout(15 * 60 * 1000);
             connection.setUseCaches(false);
             connection.setDoOutput(true);
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            connection.setChunkedStreamingMode(256 * 1024);
 
             rawOutput = connection.getOutputStream();
             output = new BufferedOutputStream(rawOutput);
@@ -729,7 +749,7 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
 
     private void writeFilePart(OutputStream output, String boundary, SelectedUploadFile file) throws Exception {
         output.write(("--" + boundary + "\r\n").getBytes("UTF-8"));
-        output.write(("Content-Disposition: form-data; name=\"file" + System.nanoTime() + "\"; filename=\"" + file.fileName + "\"\r\n").getBytes("UTF-8"));
+        output.write(("Content-Disposition: form-data; name=\"files\"; filename=\"" + file.fileName + "\"\r\n").getBytes("UTF-8"));
         output.write(("Content-Type: " + resolveMimeType(file.fileName) + "\r\n\r\n").getBytes("UTF-8"));
 
         InputStream input = null;

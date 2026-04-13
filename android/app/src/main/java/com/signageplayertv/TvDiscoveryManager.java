@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 
 public final class TvDiscoveryManager {
     private static final String SERVICE_TYPE = "_tv._tcp.";
+    private static final long DISCOVERY_STALE_MS = 30000L;
 
     private final Context context;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -100,13 +101,7 @@ public final class TvDiscoveryManager {
             public void onServiceLost(NsdServiceInfo service) {
                 String key = service.getHost() != null ? service.getHost().getHostAddress() : service.getServiceName();
                 if (key == null) return;
-                JSONObject cached = discoveredByIp.get(key);
-                if (cached == null) return;
-                try {
-                    cached.put("online", false);
-                    cached.put("status", "offline");
-                } catch (Exception ignored) {
-                }
+                discoveredByIp.remove(key);
             }
 
             @Override
@@ -141,18 +136,19 @@ public final class TvDiscoveryManager {
                     if (host == null) return;
                     String ip = host.getHostAddress();
                     if (ip == null || ip.contains(":")) return;
-                    fetchStatus(ip);
+                    fetchStatus(ip, resolved.getPort());
                 }
             });
         } catch (Exception ignored) {
         }
     }
 
-    private void fetchStatus(final String ip) {
+    private void fetchStatus(final String ip, final int port) {
         executor.execute(() -> {
             HttpURLConnection connection = null;
             try {
-                URL url = new URL("http://" + ip + ":" + EmbeddedCmsRuntime.getServerPort() + "/status");
+                int safePort = port > 0 ? port : EmbeddedCmsRuntime.DEFAULT_SERVER_PORT;
+                URL url = new URL("http://" + ip + ":" + safePort + "/status");
                 connection = (HttpURLConnection) url.openConnection();
                 connection.setConnectTimeout(2500);
                 connection.setReadTimeout(2500);
@@ -168,8 +164,13 @@ public final class TvDiscoveryManager {
                 JSONObject status = new JSONObject(builder.toString());
                 status.put("online", true);
                 status.put("status", "online");
+                status.put("lastSeen", System.currentTimeMillis());
+                if (status.optInt("port", 0) <= 0) {
+                    status.put("port", safePort);
+                }
                 discoveredByIp.put(ip, status);
             } catch (Exception ignored) {
+                discoveredByIp.remove(ip);
             } finally {
                 if (connection != null) connection.disconnect();
             }
@@ -187,6 +188,9 @@ public final class TvDiscoveryManager {
     public JSONArray getDiscoveredDevices() {
         JSONArray out = new JSONArray();
         for (JSONObject value : discoveredByIp.values()) {
+            long lastSeen = value.optLong("lastSeen", 0L);
+            if (lastSeen > 0L && (System.currentTimeMillis() - lastSeen) > DISCOVERY_STALE_MS) continue;
+            if (!value.optBoolean("online", true)) continue;
             out.put(value);
         }
         return out;

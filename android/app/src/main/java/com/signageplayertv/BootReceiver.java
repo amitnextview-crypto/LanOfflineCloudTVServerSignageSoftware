@@ -21,6 +21,7 @@ package com.signageplayertv;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.util.Log;
 
 public class BootReceiver extends BroadcastReceiver {
@@ -49,20 +50,27 @@ public class BootReceiver extends BroadcastReceiver {
                 Log.e("BOOT", "Failed to start keep alive service", e);
             }
 
-            Intent i = new Intent(context, MainActivity.class);
-            i.setAction(Intent.ACTION_MAIN);
-            i.addCategory(Intent.CATEGORY_HOME);
-            i.addCategory(Intent.CATEGORY_DEFAULT);
-            i.addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-            i.addFlags(
+            Intent launchIntent;
+            try {
+                PackageManager pm = context.getPackageManager();
+                launchIntent = pm.getLaunchIntentForPackage(context.getPackageName());
+            } catch (Exception ignored) {
+                launchIntent = null;
+            }
+
+            if (launchIntent == null) {
+                launchIntent = new Intent(context, MainActivity.class);
+                launchIntent.setAction(Intent.ACTION_MAIN);
+                launchIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+                launchIntent.addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
+            }
+
+            launchIntent.addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK
                             | Intent.FLAG_ACTIVITY_CLEAR_TOP
                             | Intent.FLAG_ACTIVITY_SINGLE_TOP
             );
-
-            if (i != null) {
-                context.startActivity(i);
-            }
+            context.startActivity(launchIntent);
         }
     }
 }

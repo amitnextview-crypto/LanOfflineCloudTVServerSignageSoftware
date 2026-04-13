@@ -9,6 +9,7 @@ const PPTX_RENDER_DPR = 1;
 const MAX_FILES_PER_UPLOAD = 120;
 const HARD_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
 const WARN_FILE_SIZE_BYTES = 700 * 1024 * 1024;
+const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 
 const GRID3_LAYOUTS = [
   { id: "stack-v", label: "Stack Vertical" },
@@ -485,7 +486,7 @@ function uploadWithProgress(url, formData, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url, true);
-    xhr.timeout = 120000;
+    xhr.timeout = UPLOAD_TIMEOUT_MS;
 
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
@@ -502,9 +503,48 @@ function uploadWithProgress(url, formData, onProgress) {
     };
 
     xhr.onerror = () => reject(new Error("Network error during upload"));
-    xhr.ontimeout = () => reject(new Error("Upload timed out"));
+    xhr.ontimeout = () => reject(new Error("Upload timed out while waiting for server response"));
     xhr.send(formData);
   });
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function verifyUploadedFilesOnOrigin(origin, section, uploadFiles, retries = 8, delayMs = 2500) {
+  const expectedNames = uploadFiles
+    .map((file) => String(file?.name || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (!expectedNames.length) return false;
+
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    try {
+      const res = await fetch(`${origin}/media-list?ts=${Date.now()}`);
+      const files = await res.json();
+      const existing = new Set(
+        (Array.isArray(files) ? files : [])
+          .filter((item) => Number(item?.section || 0) === Number(section))
+          .map((item) => String(item?.originalName || item?.name || "").trim().toLowerCase())
+          .filter(Boolean)
+      );
+      if (expectedNames.every((name) => existing.has(name))) {
+        return true;
+      }
+    } catch (_e) {
+    }
+    if (attempt < retries - 1) {
+      await wait(delayMs);
+    }
+  }
+  return false;
+}
+
+async function verifyUploadedFilesAcrossOrigins(origins, section, uploadFiles) {
+  const checks = await Promise.all(
+    (origins || []).map((origin) => verifyUploadedFilesOnOrigin(origin, section, uploadFiles))
+  );
+  return checks.length > 0 && checks.every(Boolean);
 }
 
 function cloneUploadFormData(files, containsPpt) {
@@ -2420,15 +2460,19 @@ async function uploadMedia(section) {
     if (!proceed) return;
   }
 
+  let deviceOrigins = [];
+  let primaryOrigin = "";
+  let uploadFiles = [...validFiles];
+
   try {
     loader.classList.remove("hidden");
     updateUploadProgress(0, "Preparing upload...");
 
-    const deviceOrigins = getSelectedOrigins();
+    deviceOrigins = getSelectedOrigins();
     if (!deviceOrigins.length) {
       throw new Error("Select at least one device first.");
     }
-    const primaryOrigin = deviceOrigins[0];
+    primaryOrigin = deviceOrigins[0];
     if (selectedHasVideo) {
       const allowed = await canUploadVideosToSection(primaryOrigin, section);
       if (!allowed) {
@@ -2453,8 +2497,6 @@ async function uploadMedia(section) {
         return;
       }
     }
-
-    let uploadFiles = [...validFiles];
 
     const legacyPpt = uploadFiles.filter((f) => PPT_LEGACY_EXT.test(f.name || ""));
     if (legacyPpt.length) {
@@ -2515,6 +2557,17 @@ async function uploadMedia(section) {
     showNotice("success", "Upload Complete", "Media uploaded successfully.");
   } catch (err) {
     const rawMessage = String(err?.message || "Unknown error");
+    if (/network error during upload|upload timed out/i.test(rawMessage) && deviceOrigins.length && uploadFiles.length) {
+      updateUploadProgress(96, "Upload connection interrupted. Verifying saved media...");
+      const recovered = await verifyUploadedFilesAcrossOrigins(deviceOrigins, section, uploadFiles);
+      if (recovered) {
+        await loadPreviewMediaSection(primaryOrigin || deviceOrigins[0], section);
+        renderScreenPreview();
+        updateUploadProgress(100, "Upload complete");
+        showNotice("success", "Upload Complete", "Media uploaded successfully.");
+        return;
+      }
+    }
     const message = /pdf engine/i.test(rawMessage)
       ? `${rawMessage}\n\nPDF uploads require conversion on the CMS page before sending to devices.`
       : /pptx|powerpoint/i.test(rawMessage)

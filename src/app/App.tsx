@@ -166,6 +166,11 @@ export default function App() {
   >({});
   const [playlistSyncAt, setPlaylistSyncAt] = useState(0);
   const [contentResetVersion, setContentResetVersion] = useState(0);
+  const [sectionMediaVersion, setSectionMediaVersion] = useState<Record<number, number>>({
+    1: 0,
+    2: 0,
+    3: 0,
+  });
   const [sectionPlaybackTimeline, setSectionPlaybackTimeline] = useState<Record<number, any>>({});
   const [apkUpdateState, setApkUpdateState] = useState<{
     status: string;
@@ -351,6 +356,49 @@ export default function App() {
       [section]: timeline,
     }));
   }
+
+  function bumpSectionMediaVersion(section?: number) {
+    const safeSection = Number(section || 0);
+    if (!safeSection || safeSection < 1 || safeSection > 3) return;
+    setSectionMediaVersion((current) => ({
+      ...current,
+      [safeSection]: Number(current?.[safeSection] || 0) + 1,
+    }));
+  }
+
+  const refreshPlayerMediaImmediately = async (section?: number) => {
+    await resetMediaRuntimeState({ clearListCache: true });
+    if (section && section >= 1 && section <= 3) {
+      mergePlaybackTimeline(section, {
+        section,
+        syncAt: Date.now(),
+        cycleId: `local-${String(section)}-${Date.now()}`,
+      });
+      bumpSectionMediaVersion(section);
+      return;
+    }
+    await clearPersistedPlaybackState();
+    resetRuntimePlaybackSnapshots();
+    setContentResetVersion((prev) => prev + 1);
+    setPlaylistSyncAt(Date.now());
+    setMediaVersion((prev) => prev + 1);
+  };
+
+  const finalizePlayerMediaRefresh = async (section?: number) => {
+    await syncMedia({
+      force: true,
+      forceHard: true,
+      pruneStaleNow: true,
+    });
+    await clearRuntimeTransientCache();
+    await clearOldCachedMediaExceptActive();
+    lastMediaSyncAtRef.current = new Date().toISOString();
+    if (section && section >= 1 && section <= 3) {
+      bumpSectionMediaVersion(section);
+      return;
+    }
+    setMediaVersion((prev) => prev + 1);
+  };
 
   async function clearOldCachedMediaExceptActive() {
     try {
@@ -547,43 +595,24 @@ export default function App() {
     const nativeDeviceModule = (NativeModules as any)?.DeviceIdModule;
     if (!nativeDeviceModule) return;
     const emitter = new NativeEventEmitter(nativeDeviceModule);
-    const sub = emitter.addListener("embeddedCmsEvent", async (event: any) => {
-      try {
-        const type = String(event?.type || "").trim();
-        const payload = event?.payload ? JSON.parse(String(event.payload)) : {};
-        if (type === "config-updated") {
+      const sub = emitter.addListener("embeddedCmsEvent", async (event: any) => {
+        try {
+          const type = String(event?.type || "").trim();
+          const payload = event?.payload ? JSON.parse(String(event.payload)) : {};
+          if (type === "config-updated") {
           const loadedConfig = await loadConfig(setConfig);
           setSectionPlaybackTimeline(normalizePlaybackTimeline(loadedConfig?.playbackTimeline));
-          lastConfigSyncAtRef.current = new Date().toISOString();
-          return;
-        }
-        if (type === "media-updated") {
-          await clearPersistedPlaybackState();
-          resetRuntimePlaybackSnapshots();
-          setContentResetVersion((prev) => prev + 1);
-          await resetMediaRuntimeState({ clearListCache: true });
-          await syncMedia({
-            force: true,
-            forceHard: true,
-            blockUntilCachedSmallBytes: SMALL_CACHE_BLOCK_BYTES,
-            pruneStaleNow: true,
-          });
-          await clearRuntimeTransientCache();
-          await clearOldCachedMediaExceptActive();
-          if (payload?.section) {
-            mergePlaybackTimeline(Number(payload.section || 0), {
-              section: Number(payload.section || 0),
-              syncAt: Date.now(),
-              cycleId: `local-${String(payload.section)}-${Date.now()}`,
-            });
+            lastConfigSyncAtRef.current = new Date().toISOString();
+            return;
           }
-          setPlaylistSyncAt(Date.now());
-          setMediaVersion((prev) => prev + 1);
-          lastMediaSyncAtRef.current = new Date().toISOString();
+          if (type === "media-updated") {
+            const section = Number(payload?.section || 0);
+            await refreshPlayerMediaImmediately(section);
+            void finalizePlayerMediaRefresh(section);
+          }
+        } catch {
         }
-      } catch {
-      }
-    });
+      });
     return () => {
       sub.remove();
     };
@@ -1358,40 +1387,27 @@ export default function App() {
         socket.on("media-updated", (payload) => {
           const syncAt = Number(payload?.syncAt || 0);
           const section = Number(payload?.section || 0);
+          if (section) {
+            setPrioritySection(section);
+          }
           if (section && payload?.timeline) {
             mergePlaybackTimeline(section, payload.timeline);
           }
-          if (syncAt > Date.now()) {
-            setPlaylistSyncAt(syncAt);
-          } else {
-            setPlaylistSyncAt(Date.now());
+          if (!section) {
+            if (syncAt > Date.now()) {
+              setPlaylistSyncAt(syncAt);
+            } else {
+              setPlaylistSyncAt(Date.now());
+            }
           }
           emitDeviceHealth("media-updated-received");
-          if (isMounted) {
-            // Trigger immediate refresh so new uploads start streaming right away.
-            setMediaVersion((prev) => prev + 1);
-          }
           if (mediaUpdateTimer) clearTimeout(mediaUpdateTimer);
-            mediaUpdateTimer = setTimeout(async () => {
-              mediaUpdateTimer = null;
-              try {
-                await clearPersistedPlaybackState();
-                resetRuntimePlaybackSnapshots();
-                setContentResetVersion((prev) => prev + 1);
-                await resetMediaRuntimeState({ clearListCache: true });
-                await syncMedia({
-                  force: true,
-                  forceHard: true,
-                  blockUntilCachedSmallBytes: SMALL_CACHE_BLOCK_BYTES,
-                  pruneStaleNow: true,
-                });
-                await clearRuntimeTransientCache();
-                await clearOldCachedMediaExceptActive();
-              lastMediaSyncAtRef.current = new Date().toISOString();
+          mediaUpdateTimer = setTimeout(async () => {
+            mediaUpdateTimer = null;
+            try {
+              await refreshPlayerMediaImmediately(section);
+              await finalizePlayerMediaRefresh(section);
             } finally {
-              if (isMounted) {
-                setMediaVersion((prev) => prev + 1);
-              }
               await emitDeviceHealthSnapshot("media-updated-synced", {}, { forceStorageScan: true });
             }
           }, MEDIA_UPDATE_DEBOUNCE_MS);
@@ -1422,6 +1438,7 @@ export default function App() {
             : "";
 
           if (status === "processing") {
+            setPrioritySection(section);
             setUploadProcessingBySection((prev) => ({
               ...prev,
               [section]: `${message || "Uploading... Please wait."}${countSuffix}`,
@@ -1436,6 +1453,7 @@ export default function App() {
           }
 
           if (status === "ready") {
+            setPrioritySection(section);
             setUploadProcessingBySection((prev) => ({
               ...prev,
               [section]: "Applying new media on device... Please wait.",
@@ -1454,17 +1472,7 @@ export default function App() {
               sectionRefreshTimersRef.current[section] = setTimeout(async () => {
                 sectionRefreshTimersRef.current[section] = null;
                 try {
-                await clearPersistedPlaybackState();
-                resetRuntimePlaybackSnapshots();
-                if (section) {
-                  mergePlaybackTimeline(section, {
-                    section,
-                    syncAt: Date.now(),
-                    cycleId: `local-${section}-${Date.now()}`,
-                  });
-                }
-                setContentResetVersion((prev) => prev + 1);
-                  await resetMediaRuntimeState({ clearListCache: true });
+                  await refreshPlayerMediaImmediately(section);
                   await syncMedia({
                     force: true,
                     forceHard: true,
@@ -1473,9 +1481,9 @@ export default function App() {
                   });
                   await clearRuntimeTransientCache();
                   await clearOldCachedMediaExceptActive();
+                  lastMediaSyncAtRef.current = new Date().toISOString();
                   if (isMounted) {
-                    setPlaylistSyncAt(Date.now());
-                    setMediaVersion((prev) => prev + 1);
+                    bumpSectionMediaVersion(section);
                   }
                   setUploadProcessingBySection((prev) => {
                     const next = { ...prev };
@@ -1951,6 +1959,7 @@ export default function App() {
           <PlayerScreen
             config={safeConfig}
             mediaVersion={mediaVersion}
+            sectionMediaVersion={sectionMediaVersion}
             playlistSyncAt={playlistSyncAt}
             contentResetVersion={contentResetVersion}
             sectionPlaybackTimeline={sectionPlaybackTimeline}

@@ -50,6 +50,7 @@ function isScheduleActive(schedule: any): boolean {
 export default function PlayerScreen({
   config,
   mediaVersion,
+  sectionMediaVersion,
   playlistSyncAt,
   contentResetVersion,
   sectionPlaybackTimeline,
@@ -63,7 +64,8 @@ export default function PlayerScreen({
   const getSectionKey = (sectionIndex: number) => {
     const timeline = sectionPlaybackTimeline?.[sectionIndex + 1] || null;
     const cycle = String(timeline?.cycleId || timeline?.syncAt || "none");
-    return `section-${sectionIndex}-${rendererEpoch}-${cycle}`;
+    const sectionVersion = Number(sectionMediaVersion?.[sectionIndex + 1] || 0);
+    return `section-${sectionIndex}-${rendererEpoch}-${sectionVersion}-${cycle}`;
   };
   const tickerHeight = config?.ticker?.text
     ? (config.ticker.fontSize || 24) + 12
