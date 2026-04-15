@@ -231,7 +231,7 @@
     );
     const mappedIds = state.devices
       .filter((device) => selectedOrigins.has(getDeviceOrigin(device)))
-      .map((device) => String(device?.deviceId || "").trim())
+      .map((device) => normalizeDeviceId(device?.deviceId))
       .filter(Boolean);
     state.selectedDevices = new Set(mappedIds);
   }
@@ -242,22 +242,26 @@
     if (!state.selectedDevices.size && typeof window.__cmsGetSelectedOrigins !== "function") {
       state.selectedDevices = new Set(
         state.devices
-          .map((device) => String(device?.deviceId || "").trim())
+          .map((device) => normalizeDeviceId(device?.deviceId))
           .filter(Boolean)
       );
     } else {
       state.selectedDevices = new Set(
         Array.from(state.selectedDevices).filter((deviceId) =>
-          state.devices.some((device) => device.deviceId === deviceId)
+          state.devices.some((device) => normalizeDeviceId(device?.deviceId) === normalizeDeviceId(deviceId))
         )
       );
     }
   }
 
   function getSelectedDeviceEntries() {
-    const deviceMap = new Map(state.devices.map((device) => [device.deviceId, device]));
+    const deviceMap = new Map(
+      state.devices
+        .map((device) => [normalizeDeviceId(device?.deviceId), device])
+        .filter(([deviceId]) => deviceId)
+    );
     return Array.from(state.selectedDevices)
-      .map((deviceId) => deviceMap.get(deviceId))
+      .map((deviceId) => deviceMap.get(normalizeDeviceId(deviceId)))
       .filter(Boolean);
   }
 
@@ -310,7 +314,11 @@
   }
 
   async function applySelectedDevices(nextSelected, options = {}) {
-    state.selectedDevices = new Set(Array.from(nextSelected || []).filter(Boolean));
+    state.selectedDevices = new Set(
+      Array.from(nextSelected || [])
+        .map((deviceId) => normalizeDeviceId(deviceId))
+        .filter(Boolean)
+    );
     await syncSelectedOriginsToMainUi();
     renderDevicePicker("enterpriseDevicePicker");
     renderDevicePicker("enterpriseBulkTargets");
@@ -335,10 +343,14 @@
     }
   }
 
-  function clearActiveGroupSelection() {
+  function deactivateActiveGroupSelection() {
     state.activeGroupId = "";
     persistActiveGroupId("");
-    renderGroups();
+  }
+
+  async function clearActiveGroupSelection() {
+    deactivateActiveGroupSelection();
+    await applySelectedDevices([], { refreshGroups: true });
   }
 
   async function syncActiveGroupSelection() {
@@ -389,11 +401,12 @@
       return;
     }
     state.devices.forEach((device) => {
+      const deviceKey = normalizeDeviceId(device?.deviceId);
       const row = document.createElement("div");
       row.className = "enterprise-picker-item";
       row.innerHTML = `
         <label>
-          <input type="checkbox" data-device-id="${device.deviceId}" ${selected.has(device.deviceId) ? "checked" : ""} />
+          <input type="checkbox" data-device-id="${device.deviceId}" ${selected.has(deviceKey) ? "checked" : ""} />
           <span>${device.name || device.deviceId}</span>
         </label>
         <span class="enterprise-badge ${device.online ? "online" : "offline"}">
@@ -402,9 +415,9 @@
       `;
       const checkbox = row.querySelector("input");
       checkbox.addEventListener("change", async () => {
-        if (checkbox.checked) selected.add(device.deviceId);
-        else selected.delete(device.deviceId);
-        clearActiveGroupSelection();
+        if (checkbox.checked) selected.add(deviceKey);
+        else selected.delete(deviceKey);
+        deactivateActiveGroupSelection();
         await applySelectedDevices(selected);
       });
       wrap.appendChild(row);
@@ -538,7 +551,7 @@
         if (!deviceId) return;
         if (state.selectedDevices.has(deviceId)) state.selectedDevices.delete(deviceId);
         else state.selectedDevices.add(deviceId);
-        clearActiveGroupSelection();
+        deactivateActiveGroupSelection();
         await applySelectedDevices(state.selectedDevices);
       });
     });

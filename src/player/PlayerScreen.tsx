@@ -67,9 +67,6 @@ export default function PlayerScreen({
     const sectionVersion = Number(sectionMediaVersion?.[sectionIndex + 1] || 0);
     return `section-${sectionIndex}-${rendererEpoch}-${sectionVersion}-${cycle}`;
   };
-  const tickerHeight = config?.ticker?.text
-    ? (config.ticker.fontSize || 24) + 12
-    : 0;
   const grid3Layout = config?.grid3Layout || "stack-v";
   const gridRatio = config?.gridRatio || "1:1:1";
   useEffect(() => {
@@ -202,6 +199,8 @@ export default function PlayerScreen({
               contentResetVersion={contentResetVersion}
               sectionTimeline={sectionPlaybackTimeline?.[1] || null}
               processingMessage={uploadProcessingBySection?.[1] || ""}
+              processingCount={uploadCountsBySection?.[1] || null}
+              onPlaybackChange={onPlaybackChange}
               onPlaybackError={onPlaybackError}
             />
           </View>
@@ -216,6 +215,8 @@ export default function PlayerScreen({
                 contentResetVersion={contentResetVersion}
                 sectionTimeline={sectionPlaybackTimeline?.[2] || null}
                 processingMessage={uploadProcessingBySection?.[2] || ""}
+                processingCount={uploadCountsBySection?.[2] || null}
+                onPlaybackChange={onPlaybackChange}
                 onPlaybackError={onPlaybackError}
               />
             </View>
@@ -229,6 +230,8 @@ export default function PlayerScreen({
                 contentResetVersion={contentResetVersion}
                 sectionTimeline={sectionPlaybackTimeline?.[3] || null}
                 processingMessage={uploadProcessingBySection?.[3] || ""}
+                processingCount={uploadCountsBySection?.[3] || null}
+                onPlaybackChange={onPlaybackChange}
                 onPlaybackError={onPlaybackError}
               />
             </View>

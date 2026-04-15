@@ -41,6 +41,8 @@ let alertsPollTimer = null;
 let selectedGridRatio = "1:1:1";
 let latestDeviceStatusList = [];
 let isDeviceDashboardOpen = false;
+let pendingUploadSelections = { 1: [], 2: [], 3: [] };
+let configLoadToken = 0;
 const seenApkUpdateSuccessNotices = new Set();
 
 function removeActiveMessageDialogs() {
@@ -232,6 +234,60 @@ function updateUploadProgress(percent, statusText) {
   if (fill) fill.style.width = `${clamped}%`;
   if (progressText) progressText.textContent = `${clamped}%`;
   if (status && statusText) status.textContent = statusText;
+}
+
+function getPendingUploadFiles(section) {
+  const safeSection = Number(section || 0);
+  if (!safeSection) return [];
+  return Array.isArray(pendingUploadSelections[safeSection])
+    ? pendingUploadSelections[safeSection]
+    : [];
+}
+
+function updateUploadSelectionStatus(section) {
+  const safeSection = Number(section || 0);
+  const statusEl = document.getElementById(`mediaStatus${safeSection}`);
+  if (!statusEl) return;
+
+  const files = getPendingUploadFiles(safeSection);
+  if (!files.length) {
+    statusEl.textContent = "No files selected";
+    return;
+  }
+
+  const names = files
+    .slice(0, 3)
+    .map((file) => String(file?.name || "").trim())
+    .filter(Boolean);
+  const remaining = files.length - names.length;
+  statusEl.textContent =
+    remaining > 0
+      ? `${files.length} file(s) selected: ${names.join(", ")} +${remaining} more`
+      : `${files.length} file(s) selected: ${names.join(", ")}`;
+}
+
+function captureUploadSelection(section) {
+  const safeSection = Number(section || 0);
+  const input = document.getElementById(`media${safeSection}`);
+  const files = Array.from(input?.files || []);
+  pendingUploadSelections = {
+    ...pendingUploadSelections,
+    [safeSection]: files,
+  };
+  updateUploadSelectionStatus(safeSection);
+}
+
+function clearUploadSelection(section) {
+  const safeSection = Number(section || 0);
+  const input = document.getElementById(`media${safeSection}`);
+  if (input) {
+    input.value = "";
+  }
+  pendingUploadSelections = {
+    ...pendingUploadSelections,
+    [safeSection]: [],
+  };
+  updateUploadSelectionStatus(safeSection);
 }
 
 function validateUploadFiles(fileList) {
@@ -1612,8 +1668,11 @@ function startPreviewPolling() {
 
   previewPollTimer = setInterval(async () => {
     const deviceId = document.getElementById("deviceSelect")?.value || "all";
-    await loadPreviewMediaSection(deviceId, section);
-    renderScreenPreview();
+    try {
+      await loadPreviewMedia(deviceId);
+      renderScreenPreview();
+    } catch (_e) {
+    }
   }, 15000);
 }
 
@@ -1836,12 +1895,7 @@ function toggleDeviceDashboard(forceValue) {
 }
 
 function selectDeviceFromDashboard(deviceId) {
-  const select = document.getElementById("deviceSelect");
-  if (!select) return;
-  select.value = deviceId;
-  loadConfig();
-  renderHealthSummary(latestDeviceStatusList);
-  renderDeviceAlerts(latestDeviceStatusList);
+  syncSelectedDeviceView(deviceId);
 }
 
 function renderDeviceAlerts(statusList) {
@@ -2017,6 +2071,9 @@ function renderUploadSections() {
   container.innerHTML = "";
 
   const count = sectionCount(layout);
+  for (let i = count + 1; i <= 3; i += 1) {
+    pendingUploadSelections[i] = [];
+  }
 
   for (let i = 1; i <= count; i++) {
     container.innerHTML += `
@@ -2048,9 +2105,15 @@ function renderUploadSections() {
           />
           <button class="btn primary" onclick="uploadMedia(${i})">Upload Section ${i}</button>
         </div>
+        <div id="mediaStatus${i}" class="section-help">No files selected</div>
       </div>
     `;
+    const input = document.getElementById(`media${i}`);
+    if (input) {
+      input.addEventListener("change", () => captureUploadSelection(i));
+    }
     updateSectionUploadMode(i);
+    updateUploadSelectionStatus(i);
   }
 }
 
@@ -2094,8 +2157,7 @@ async function uploadMedia(section) {
   }
 
   const loader = document.getElementById("uploadLoader");
-  const input = document.getElementById(`media${section}`);
-  const files = input?.files;
+  const files = getPendingUploadFiles(section);
 
   const { errors, warnings, validFiles, totalSize } = validateUploadFiles(files);
   const selectedHasVideo = validFiles.some((f) => VIDEO_FILE_EXT.test(f.name || ""));
@@ -2117,11 +2179,10 @@ async function uploadMedia(section) {
   }
 
   let uploadFiles = [...validFiles];
+  const deviceId = document.getElementById("deviceSelect").value;
   try {
     loader.classList.remove("hidden");
     updateUploadProgress(0, "Preparing upload...");
-
-    const deviceId = document.getElementById("deviceSelect").value;
     if (selectedHasVideo) {
       const allowed = await canUploadVideosToSection(deviceId, section);
       if (!allowed) {
@@ -2209,6 +2270,7 @@ async function uploadMedia(section) {
 
     updateUploadProgress(100, "Upload complete");
     showNotice("success", "Upload Complete", "Media uploaded successfully.");
+    clearUploadSelection(section);
   } catch (err) {
     const rawMessage = String(err?.message || "Unknown error");
     if (/network error during upload|upload timed out/i.test(rawMessage) && uploadFiles.length) {
@@ -2219,6 +2281,7 @@ async function uploadMedia(section) {
         renderScreenPreview();
         updateUploadProgress(100, "Upload complete");
         showNotice("success", "Upload Complete", "Media uploaded successfully.");
+        clearUploadSelection(section);
         return;
       }
     }
@@ -2234,10 +2297,12 @@ async function uploadMedia(section) {
   }
 }
 
-async function loadConfig() {
-  const targetDevice = document.getElementById("deviceSelect")?.value || "all";
+async function loadConfig(targetDeviceOverride = "", tokenOverride = 0) {
+  const targetDevice = String(targetDeviceOverride || document.getElementById("deviceSelect")?.value || "all");
+  const requestToken = Number(tokenOverride || 0) || ++configLoadToken;
   const res = await fetch(`/config?deviceId=${targetDevice}&ts=${Date.now()}`);
   const config = await res.json();
+  if (requestToken !== configLoadToken) return null;
 
   document.getElementById("orientation").value = config.orientation || "horizontal";
   document.getElementById("layout").value = config.layout || "fullscreen";
@@ -2269,6 +2334,7 @@ async function loadConfig() {
     gridRatio: selectedGridRatio,
   };
   await loadPreviewMedia(targetDevice);
+  if (requestToken !== configLoadToken) return null;
   updateGridRatioOptions();
   renderGrid3LayoutOptions();
   renderUploadSections();
@@ -2281,6 +2347,24 @@ async function loadConfig() {
     updateSectionUploadMode(i);
   }
   updateSectionVisibility();
+  return config;
+}
+
+async function syncSelectedDeviceView(targetDeviceOverride = "") {
+  const select = document.getElementById("deviceSelect");
+  const requested = String(targetDeviceOverride || "").trim();
+  if (select && requested) {
+    const hasRequested = Array.from(select.options || []).some((option) => String(option?.value || "") === requested);
+    select.value = hasRequested ? requested : "all";
+  }
+  const activeTarget = String(select?.value || requested || "all");
+  const requestToken = ++configLoadToken;
+  await loadConfig(activeTarget, requestToken);
+  if (requestToken !== configLoadToken) return;
+  await loadDeviceAlerts();
+  if (requestToken !== configLoadToken) return;
+  renderHealthSummary(latestDeviceStatusList);
+  renderDeviceAlerts(latestDeviceStatusList);
 }
 
 async function saveConfig() {
@@ -2483,6 +2567,7 @@ window.selectDeviceFromDashboard = selectDeviceFromDashboard;
 window.__cmsBuildConfig = buildConfigFromForm;
 window.__cmsLoadDevices = loadDevices;
 window.__cmsLoadConfig = loadConfig;
+window.__cmsSetEnterprisePreviewDevice = syncSelectedDeviceView;
 window.__cmsShowNotice = showNotice;
 window.__cmsShowConfirmDialog = showConfirmDialog;
 
@@ -2491,7 +2576,7 @@ document.addEventListener("DOMContentLoaded", () => {
   updateScheduleFallbackVisibility();
   updateUploadProgress(0, "Preparing upload...");
   loadDevices();
-  loadConfig();
+  syncSelectedDeviceView();
   startPreviewPolling();
   startAlertsPolling();
 
@@ -2504,9 +2589,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("deviceSelect").addEventListener("change", () => {
-    loadConfig();
-    loadDeviceAlerts();
-    renderHealthSummary(latestDeviceStatusList);
+    syncSelectedDeviceView();
   });
   document.getElementById("gridRatio").addEventListener("change", (e) => {
     selectedGridRatio = e.target.value;

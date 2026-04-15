@@ -1265,6 +1265,7 @@ input[type="range"] {
 }
 
 .enterprise-toolbar input,
+.enterprise-toolbar select,
 .enterprise-form input,
 .enterprise-form select {
   width: 100%;
@@ -1335,6 +1336,11 @@ input[type="range"] {
   border-radius: 12px;
   background: rgba(8, 16, 25, 0.68);
   padding: 10px 12px;
+}
+
+.enterprise-group-card.is-active {
+  border-color: rgba(105, 214, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(105, 214, 255, 0.28) inset;
 }
 
 .enterprise-group-head {

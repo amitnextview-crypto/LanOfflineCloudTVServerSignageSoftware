@@ -333,9 +333,13 @@
         <section class="sub-card enterprise-section">
           <h3>Groups</h3>
           <div class="enterprise-toolbar">
+            <select id="enterpriseGroupQuickSelect">
+              <option value="">None</option>
+            </select>
             <input type="text" id="enterpriseGroupSearch" placeholder="Search groups" />
             <button class="btn primary" type="button" onclick="window.enterpriseRefreshGroups?.()">Refresh</button>
           </div>
+          <div id="enterpriseGroupSelectionMeta" class="enterprise-meta">None selected. All devices stay unchecked until you manually check them or pick a group.</div>
           <div class="enterprise-form">
             <label>Group Name</label>
             <input type="text" id="enterpriseGroupName" placeholder="Example: Lobby TVs" />

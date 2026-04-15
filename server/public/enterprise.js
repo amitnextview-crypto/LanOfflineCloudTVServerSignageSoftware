@@ -4,11 +4,44 @@
     devices: [],
     queue: null,
     selectedDevices: new Set(),
+    activeGroupId: "",
+    previewDeviceId: "",
     editingGroupId: "",
   };
 
+  function normalizeDeviceId(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function normalizeDeviceIdList(values) {
+    return Array.from(
+      new Set(
+        Array.from(values || [])
+          .map((value) => normalizeDeviceId(value))
+          .filter(Boolean)
+      )
+    ).sort();
+  }
+
+  function buildDeviceSelectionSignature(values) {
+    return normalizeDeviceIdList(values).join("|");
+  }
+
   function byId(id) {
     return document.getElementById(id);
+  }
+
+  function loadActiveGroupId() {
+    return "";
+  }
+
+  function persistActiveGroupId(groupId) {
+    if (!groupId) {
+      try {
+        window.localStorage.removeItem("cmsActiveEnterpriseGroupId");
+      } catch (_e) {
+      }
+    }
   }
 
   function notice(type, title, message, duration) {
@@ -39,14 +72,117 @@
   }
 
   function getDeviceMap() {
-    return new Map(state.devices.map((device) => [device.deviceId, device]));
+    return new Map(
+      state.devices
+        .map((device) => [normalizeDeviceId(device?.deviceId), device])
+        .filter(([deviceId]) => deviceId)
+    );
   }
 
   function getSelectedDeviceEntries() {
     const deviceMap = getDeviceMap();
     return Array.from(state.selectedDevices)
-      .map((deviceId) => deviceMap.get(deviceId))
+      .map((deviceId) => deviceMap.get(normalizeDeviceId(deviceId)))
       .filter(Boolean);
+  }
+
+  function getGroupDeviceIds(group) {
+    return (group?.devices || [])
+      .map((item) => normalizeDeviceId(item?.deviceId || item))
+      .filter(Boolean);
+  }
+
+  function syncSelectionUi() {
+    renderDevicePicker("enterpriseDevicePicker");
+    renderDevicePicker("enterpriseBulkTargets");
+    renderDevicePicker("enterpriseUploadTargets");
+    renderDeviceControlPanel();
+    updateSelectedDeviceMeta();
+  }
+
+  async function syncPreviewTarget(deviceIds = [], preferredDeviceId = "") {
+    if (typeof window.__cmsSetEnterprisePreviewDevice !== "function") return;
+    const normalized = Array.from(deviceIds || [])
+      .map((deviceId) => normalizeDeviceId(deviceId))
+      .filter(Boolean);
+    const preferred = normalizeDeviceId(preferredDeviceId);
+    const nextPreviewDeviceId =
+      preferred && normalized.includes(preferred)
+        ? preferred
+        : state.previewDeviceId && normalized.includes(normalizeDeviceId(state.previewDeviceId))
+          ? normalizeDeviceId(state.previewDeviceId)
+          : normalized[0] || "";
+    state.previewDeviceId = nextPreviewDeviceId;
+    await window.__cmsSetEnterprisePreviewDevice(nextPreviewDeviceId || "all");
+  }
+
+  function setActiveGroup(groupId) {
+    state.activeGroupId = String(groupId || "").trim();
+    persistActiveGroupId(state.activeGroupId);
+  }
+
+  function setSelectedDevices(deviceIds) {
+    state.selectedDevices = new Set(
+      Array.from(deviceIds || [])
+        .map((deviceId) => normalizeDeviceId(deviceId))
+        .filter(Boolean)
+    );
+  }
+
+  async function applySelectedDevices(deviceIds, options = {}) {
+    const previousSelectionSignature = buildDeviceSelectionSignature(
+      Array.from(state.selectedDevices)
+    );
+    const nextSelectionSignature = buildDeviceSelectionSignature(deviceIds);
+    const previousPreviewDeviceId = normalizeDeviceId(state.previewDeviceId);
+    const requestedPreviewDeviceId = normalizeDeviceId(options.previewDeviceId || "");
+
+    setSelectedDevices(deviceIds);
+    syncSelectionUi();
+    if (options.refreshGroups !== false) {
+      renderGroups();
+    }
+    const shouldSyncPreview =
+      previousSelectionSignature !== nextSelectionSignature ||
+      requestedPreviewDeviceId !== previousPreviewDeviceId;
+    if (shouldSyncPreview) {
+      await syncPreviewTarget(deviceIds, options.previewDeviceId || "");
+    }
+  }
+
+  async function applyGroupSelection(group, options = {}) {
+    if (!group) return;
+    setActiveGroup(group.id);
+    const groupDeviceIds = getGroupDeviceIds(group);
+    await applySelectedDevices(groupDeviceIds, {
+      refreshGroups: true,
+      previewDeviceId: groupDeviceIds[0] || "",
+    });
+    if (options.notify) {
+      notice("success", "Group Selected", `${group.name} loaded into the target selectors.`);
+    }
+  }
+
+  async function clearActiveGroupSelection() {
+    setActiveGroup("");
+    await applySelectedDevices([], { refreshGroups: true, previewDeviceId: "" });
+  }
+
+  async function syncActiveGroupSelection(options = {}) {
+    if (!state.activeGroupId) return;
+    const activeGroup = state.groups.find((item) => String(item?.id || "").trim() === state.activeGroupId);
+    if (!activeGroup) {
+      setActiveGroup("");
+      if (options.clearMissingGroup !== false) {
+        await applySelectedDevices([], { refreshGroups: true, previewDeviceId: "" });
+      }
+      return;
+    }
+    const activeGroupDeviceIds = getGroupDeviceIds(activeGroup);
+    await applySelectedDevices(activeGroupDeviceIds, {
+      refreshGroups: false,
+      previewDeviceId: activeGroupDeviceIds[0] || "",
+    });
   }
 
   function formatBytes(value) {
@@ -106,7 +242,7 @@
       return;
     }
     wrap.innerHTML = rows.map((device) => `
-      <button class="enterprise-device-card ${selected.has(device.deviceId) ? "is-selected" : ""}" type="button" data-device-card="${device.deviceId}">
+      <button class="enterprise-device-card ${selected.has(normalizeDeviceId(device.deviceId)) ? "is-selected" : ""}" type="button" data-device-card="${device.deviceId}">
         <div class="enterprise-device-card-head">
           <span class="enterprise-device-name">${device.name || device.deviceId}</span>
           <span class="enterprise-badge ${device.online ? "online" : "offline"}">${device.online ? "Online" : "Offline"}</span>
@@ -122,8 +258,9 @@
     `).join("");
     Array.from(wrap.querySelectorAll("[data-device-card]")).forEach((button) => {
       button.addEventListener("click", () => {
-        const deviceId = String(button.getAttribute("data-device-card") || "").trim();
+        const deviceId = normalizeDeviceId(button.getAttribute("data-device-card"));
         if (!deviceId) return;
+        setActiveGroup("");
         if (state.selectedDevices.has(deviceId)) {
           state.selectedDevices.delete(deviceId);
         } else {
@@ -148,11 +285,12 @@
       return;
     }
     state.devices.forEach((device) => {
+      const deviceKey = normalizeDeviceId(device?.deviceId);
       const row = document.createElement("div");
       row.className = "enterprise-picker-item";
       row.innerHTML = `
         <label>
-          <input type="checkbox" data-device-id="${device.deviceId}" ${selected.has(device.deviceId) ? "checked" : ""} />
+          <input type="checkbox" data-device-id="${device.deviceId}" ${selected.has(deviceKey) ? "checked" : ""} />
           <span>${device.name || device.deviceId}</span>
         </label>
         <span class="enterprise-badge ${device.online ? "online" : "offline"}">
@@ -160,18 +298,16 @@
         </span>
       `;
       const checkbox = row.querySelector("input");
-      checkbox.addEventListener("change", () => {
+      checkbox.addEventListener("change", async () => {
+        setActiveGroup("");
         if (checkbox.checked) {
-          selected.add(device.deviceId);
+          selected.add(deviceKey);
         } else {
-          selected.delete(device.deviceId);
+          selected.delete(deviceKey);
         }
-        if (targetId === "enterpriseDevicePicker") {
-          renderDevicePicker("enterpriseBulkTargets");
-          renderDevicePicker("enterpriseUploadTargets");
-        }
-        renderDeviceControlPanel();
-        updateSelectedDeviceMeta();
+        await applySelectedDevices(selected, {
+          previewDeviceId: checkbox.checked ? deviceKey : "",
+        });
       });
       wrap.appendChild(row);
     });
@@ -190,6 +326,23 @@
         .toLowerCase();
       return group.name.toLowerCase().includes(search) || deviceNames.includes(search);
     });
+    const groupSelect = byId("enterpriseGroupQuickSelect");
+    if (groupSelect) {
+      groupSelect.innerHTML = [
+        '<option value="">None</option>',
+        ...list.map((group) => `<option value="${group.id}">${group.name} (${group.deviceCount || 0})</option>`),
+      ].join("");
+      groupSelect.value = list.some((group) => group.id === state.activeGroupId)
+        ? state.activeGroupId
+        : "";
+    }
+    const groupMeta = byId("enterpriseGroupSelectionMeta");
+    if (groupMeta) {
+      const activeGroup = list.find((group) => group.id === state.activeGroupId);
+      groupMeta.textContent = activeGroup
+        ? `${activeGroup.name} selected. Choose None to clear all checks and target devices manually.`
+        : "None selected. All devices stay unchecked until you manually check them or pick a group.";
+    }
     if (!list.length) {
       wrap.innerHTML = `<div class="enterprise-meta">No groups found.</div>`;
       return;
@@ -197,7 +350,7 @@
     wrap.innerHTML = "";
     list.forEach((group) => {
       const card = document.createElement("div");
-      card.className = "enterprise-group-card";
+      card.className = `enterprise-group-card ${group.id === state.activeGroupId ? "is-active" : ""}`;
       const deviceNames = (group.devices || [])
         .map((device) => device.name || device.deviceId)
         .filter(Boolean)
@@ -220,20 +373,18 @@
           <span class="enterprise-badge offline">${group.offlineCount || 0} offline</span>
         </div>
       `;
-      card.querySelector('[data-action="edit"]').addEventListener("click", () => {
+      card.querySelector('[data-action="edit"]').addEventListener("click", async () => {
         state.editingGroupId = group.id;
         byId("enterpriseGroupName").value = group.name;
-        state.selectedDevices = new Set((group.devices || []).map((item) => item.deviceId || item));
-        renderDevicePicker("enterpriseDevicePicker");
-        renderDevicePicker("enterpriseBulkTargets");
-        renderDevicePicker("enterpriseUploadTargets");
+        setActiveGroup("");
+        const groupDeviceIds = getGroupDeviceIds(group);
+        await applySelectedDevices(groupDeviceIds, {
+          refreshGroups: true,
+          previewDeviceId: groupDeviceIds[0] || "",
+        });
       });
-      card.querySelector('[data-action="select"]').addEventListener("click", () => {
-        state.selectedDevices = new Set((group.devices || []).map((item) => item.deviceId || item));
-        renderDevicePicker("enterpriseDevicePicker");
-        renderDevicePicker("enterpriseBulkTargets");
-        renderDevicePicker("enterpriseUploadTargets");
-        notice("success", "Group Selected", `${group.name} loaded into the target selectors.`);
+      card.querySelector('[data-action="select"]').addEventListener("click", async () => {
+        await applyGroupSelection(group, { notify: true });
       });
       card.querySelector('[data-action="delete"]').addEventListener("click", async () => {
         const yes = await confirmDialog("Delete Group", `Delete group "${group.name}"?`, "Delete", "Cancel");
@@ -324,17 +475,23 @@
           network: item.meta?.networkState || null,
         }))
       : [];
-    renderDevicePicker("enterpriseDevicePicker");
-    renderDevicePicker("enterpriseBulkTargets");
-    renderDevicePicker("enterpriseUploadTargets");
-    renderDeviceControlPanel();
-    updateSelectedDeviceMeta();
+    setSelectedDevices(
+      Array.from(state.selectedDevices).filter((deviceId) =>
+        state.devices.some((device) => normalizeDeviceId(device?.deviceId) === normalizeDeviceId(deviceId))
+      )
+    );
+    syncSelectionUi();
+    await syncActiveGroupSelection({ clearMissingGroup: false });
   }
 
   async function refreshGroups() {
     const data = await fetchJson(`/api/groups?ts=${Date.now()}`);
     state.groups = Array.isArray(data.groups) ? data.groups : [];
+    if (state.activeGroupId && !state.groups.some((group) => String(group?.id || "").trim() === state.activeGroupId)) {
+      setActiveGroup("");
+    }
     renderGroups();
+    await syncActiveGroupSelection({ clearMissingGroup: false });
   }
 
   async function refreshQueue() {
@@ -381,6 +538,10 @@
     state.editingGroupId = "";
     byId("enterpriseGroupName").value = "";
     await refreshGroups();
+    const savedGroup = state.groups.find((group) => group.name === name);
+    if (savedGroup) {
+      await applyGroupSelection(savedGroup, { notify: false });
+    }
     notice("success", "Group Saved", `${name} has been saved.`);
   }
 
@@ -636,6 +797,19 @@
   document.addEventListener("DOMContentLoaded", () => {
     byId("enterpriseGroupSearch")?.addEventListener("input", renderGroups);
     byId("enterpriseDeviceSearch")?.addEventListener("input", renderDeviceControlPanel);
+    byId("enterpriseGroupQuickSelect")?.addEventListener("change", async (event) => {
+      const groupId = String(event?.target?.value || "").trim();
+      if (!groupId) {
+        await clearActiveGroupSelection();
+        return;
+      }
+      const group = state.groups.find((item) => String(item?.id || "").trim() === groupId);
+      if (group) {
+        await applyGroupSelection(group);
+      }
+    });
+    setActiveGroup("");
+    setSelectedDevices([]);
     refreshAll();
     setInterval(() => {
       refreshQueue().catch(() => {});

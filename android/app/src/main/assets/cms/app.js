@@ -46,6 +46,7 @@ let alertsPollTimer = null;
 let selectedGridRatio = "1:1:1";
 let latestDeviceStatusList = [];
 let isDeviceDashboardOpen = false;
+let pendingUploadSelections = { 1: [], 2: [], 3: [] };
 const SELECTED_ORIGINS_STORAGE_KEY = "tvCmsSelectedOrigins";
 const seenApkUpdateSuccessNotices = new Set();
 let currentDeviceMap = new Map();
@@ -889,6 +890,60 @@ function updateUploadProgress(percent, statusText) {
   if (fill) fill.style.width = `${clamped}%`;
   if (progressText) progressText.textContent = `${clamped}%`;
   if (status && statusText) status.textContent = statusText;
+}
+
+function getPendingUploadFiles(section) {
+  const safeSection = Number(section || 0);
+  if (!safeSection) return [];
+  return Array.isArray(pendingUploadSelections[safeSection])
+    ? pendingUploadSelections[safeSection]
+    : [];
+}
+
+function updateUploadSelectionStatus(section) {
+  const safeSection = Number(section || 0);
+  const statusEl = document.getElementById(`mediaStatus${safeSection}`);
+  if (!statusEl) return;
+
+  const files = getPendingUploadFiles(safeSection);
+  if (!files.length) {
+    statusEl.textContent = "No files selected";
+    return;
+  }
+
+  const names = files
+    .slice(0, 3)
+    .map((file) => String(file?.name || "").trim())
+    .filter(Boolean);
+  const remaining = files.length - names.length;
+  statusEl.textContent =
+    remaining > 0
+      ? `${files.length} file(s) selected: ${names.join(", ")} +${remaining} more`
+      : `${files.length} file(s) selected: ${names.join(", ")}`;
+}
+
+function captureUploadSelection(section) {
+  const safeSection = Number(section || 0);
+  const input = document.getElementById(`media${safeSection}`);
+  const files = Array.from(input?.files || []);
+  pendingUploadSelections = {
+    ...pendingUploadSelections,
+    [safeSection]: files,
+  };
+  updateUploadSelectionStatus(safeSection);
+}
+
+function clearUploadSelection(section) {
+  const safeSection = Number(section || 0);
+  const input = document.getElementById(`media${safeSection}`);
+  if (input) {
+    input.value = "";
+  }
+  pendingUploadSelections = {
+    ...pendingUploadSelections,
+    [safeSection]: [],
+  };
+  updateUploadSelectionStatus(safeSection);
 }
 
 window.__cmsSetLoaderVisibility = setLoaderVisibility;
@@ -2913,6 +2968,9 @@ function renderUploadSections() {
   container.innerHTML = "";
 
   const count = sectionCount(layout);
+  for (let i = count + 1; i <= 3; i += 1) {
+    pendingUploadSelections[i] = [];
+  }
 
     for (let i = 1; i <= count; i++) {
       container.innerHTML += `
@@ -2957,10 +3015,18 @@ function renderUploadSections() {
                 />
                 <button class="btn primary" type="button" onclick="uploadMedia(${i})">Upload Section ${i}</button>
               </div>
+              <div id="mediaStatus${i}" class="section-help">No files selected</div>
             `
         }
       </div>
     `;
+    if (!IS_TV_COMPACT_MODE) {
+      const input = document.getElementById(`media${i}`);
+      if (input) {
+        input.addEventListener("change", () => captureUploadSelection(i));
+      }
+      updateUploadSelectionStatus(i);
+    }
     updateSectionUploadMode(i);
   }
 }
@@ -3145,8 +3211,7 @@ async function uploadMedia(section) {
   }
 
   const loader = document.getElementById("uploadLoader");
-  const input = document.getElementById(`media${section}`);
-  const files = input?.files;
+  const files = getPendingUploadFiles(section);
 
   const { errors, warnings, validFiles, totalSize } = validateUploadFiles(files);
   const selectedHasVideo = validFiles.some((f) => VIDEO_FILE_EXT.test(f.name || ""));
@@ -3354,8 +3419,10 @@ async function uploadMedia(section) {
     const hasMeaningfulSkip = skippedOfflineTargets.length || skippedDuplicateTargets.length;
     if (successfulTargets.length && !failedTargets.length) {
       showNotice("success", "Upload Complete", summaryParts.join(" "));
+      clearUploadSelection(section);
     } else if (successfulTargets.length) {
       showNotice("warning", "Upload Partially Complete", summaryParts.join(" "), 8500);
+      clearUploadSelection(section);
     } else if (hasMeaningfulSkip && !failedTargets.length) {
       showNotice("warning", "No Upload Needed", summaryParts.join(" ") || "Selected devices did not need a new upload.", 7000);
     } else {

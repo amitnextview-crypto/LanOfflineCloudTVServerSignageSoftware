@@ -21,8 +21,8 @@ export default function AdminButton({
   const compact = !label;
   const [focused, setFocused] = useState(false);
   const isRight = side === "right";
-  const baseColor = isRight ? "#ffb225" : "#e29a19";
-  const accentColor = "#ffd24a";
+  const baseColor = isRight ? "#ffb225" : "#64d4ff";
+  const accentColor = isRight ? "#ffd24a" : "#7ef4ff";
   const activeColor = focused ? accentColor : baseColor;
   const shellSize = compact ? 24 : 29;
   return (
@@ -43,10 +43,12 @@ export default function AdminButton({
         opacity: focused ? 1 : focusable ? 0.96 : 0.7,
         alignItems: "center",
         backgroundColor: focused
-          ? "rgba(96, 58, 4, 0.98)"
+          ? isRight
+            ? "rgba(96, 58, 4, 0.98)"
+            : "rgba(6, 42, 62, 0.98)"
           : isRight
             ? "rgba(64, 37, 4, 0.94)"
-            : "rgba(54, 33, 4, 0.94)",
+            : "rgba(7, 34, 46, 0.92)",
         borderRadius: 999,
         borderWidth: focused ? 2 : 1.5,
         borderColor: focused ? accentColor : `${baseColor}cc`,
