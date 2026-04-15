@@ -3,6 +3,8 @@
 }
 
 :root {
+  --tvvh: 100vh;
+  --tvvw: 100vw;
   --bg-1: #071018;
   --bg-2: #0d1c2a;
   --card: rgba(15, 25, 36, 0.86);
@@ -24,6 +26,12 @@ body {
   min-height: 100vh;
 }
 
+html,
+body {
+  min-height: 100%;
+  height: 100%;
+}
+
 body.cms-auth-locked {
   overflow: hidden;
 }
@@ -43,7 +51,7 @@ body.cms-auth-locked {
   padding: 10px 10px 12px;
   position: relative;
   z-index: 1;
-  min-height: 100vh;
+  min-height: var(--tvvh);
 }
 
 .card {
@@ -964,7 +972,7 @@ input[type="range"] {
   grid-template-columns: minmax(220px, 0.88fr) minmax(420px, 1.22fr) minmax(280px, 0.9fr);
   gap: 14px;
   align-items: stretch;
-  height: calc(100vh - 88px);
+  height: calc(var(--tvvh) - 88px);
   min-height: 0;
 }
 
@@ -1201,13 +1209,36 @@ textarea:focus {
 body.tv-compact-mode .main-grid {
   grid-template-columns: minmax(220px, 0.88fr) minmax(420px, 1.22fr) minmax(280px, 0.9fr);
   gap: 10px;
-  height: calc(100vh - 88px);
+  flex: 1 1 auto;
+  min-height: 0;
+  height: calc(var(--tvvh) - 88px);
+}
+
+body.tv-compact-mode {
+  overflow: hidden;
+}
+
+body.tv-compact-mode .container {
+  height: var(--tvvh);
+  min-height: var(--tvvh);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+}
+
+body.tv-compact-mode .hero {
+  flex: 0 0 auto;
 }
 
 body.tv-compact-mode .left-col,
 body.tv-compact-mode .middle-col,
 body.tv-compact-mode .right-col {
   overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 20px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 body.tv-compact-mode .tv-upload-stack {
@@ -1292,6 +1323,37 @@ body.tv-compact-mode .right-col {
 
 body.tv-compact-mode .main-grid {
   grid-template-columns: minmax(220px, 0.9fr) minmax(420px, 1.1fr);
+}
+
+body.tv-compact-mode.player-orientation-vertical .main-grid,
+body.tv-compact-mode.player-orientation-reverse-vertical .main-grid {
+  grid-template-columns: 1fr;
+  height: calc(var(--tvvh) - 88px);
+}
+
+body.tv-compact-mode.player-orientation-vertical .left-col,
+body.tv-compact-mode.player-orientation-vertical .middle-col,
+body.tv-compact-mode.player-orientation-vertical .right-col,
+body.tv-compact-mode.player-orientation-reverse-vertical .left-col,
+body.tv-compact-mode.player-orientation-reverse-vertical .middle-col,
+body.tv-compact-mode.player-orientation-reverse-vertical .right-col {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0;
+}
+
+body.tv-compact-mode .card,
+body.tv-compact-mode .sub-card,
+body.tv-compact-mode .settings-card,
+body.tv-compact-mode .compact-card {
+  scroll-margin: 22px;
+}
+
+body.tv-compact-mode.player-orientation-vertical .selection-actions,
+body.tv-compact-mode.player-orientation-reverse-vertical .selection-actions {
+  align-items: flex-start;
+  flex-direction: column;
 }
 
 body.tv-compact-mode .source-controls {

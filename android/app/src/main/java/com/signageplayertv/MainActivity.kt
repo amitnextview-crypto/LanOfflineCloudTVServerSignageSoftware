@@ -30,6 +30,7 @@ class MainActivity : ReactActivity() {
 
   private val reopenHandler = Handler(Looper.getMainLooper())
   private var skipAutoReopenRestoreThisLaunch = false
+  private var suppressNextBackKeyUp = false
   private val reopenRunnable = Runnable {
     if (!isAutoReopenEnabled()) return@Runnable
     try {
@@ -187,11 +188,24 @@ override fun onWindowFocusChanged(hasFocus: Boolean) {
 
     // Long-press BACK: clear signage data and restart app.
     if (keyCode == KeyEvent.KEYCODE_BACK) {
+      suppressNextBackKeyUp = true
       clearSignageDataAndRestart()
       return true
     }
 
     return super.onKeyLongPress(keyCode, event)
+  }
+
+  override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+    if (keyCode == KeyEvent.KEYCODE_BACK) {
+      if (suppressNextBackKeyUp) {
+        suppressNextBackKeyUp = false
+        return true
+      }
+      DeviceIdModule.emitRemoteKeyEvent("back", 1)
+      return true
+    }
+    return super.onKeyUp(keyCode, event)
   }
 
   private fun getPrefs() = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

@@ -16,11 +16,18 @@ import {
 type Props = {
   compact?: boolean;
   onOpenCms?: () => void;
+  preferredFocusTarget?: "openCms" | "saveName";
 };
 
-export default function CmsAccessCard({ compact = false, onOpenCms }: Props) {
+export default function CmsAccessCard({
+  compact = false,
+  onOpenCms,
+  preferredFocusTarget = "openCms",
+}: Props) {
   const [info, setInfo] = useState<CmsAccessInfo>(getCmsAccessInfo());
   const [nameInput, setNameInput] = useState(info.deviceName || "");
+  const [openFocused, setOpenFocused] = useState(false);
+  const [saveFocused, setSaveFocused] = useState(false);
 
   useEffect(() => {
     const refresh = () => {
@@ -56,12 +63,16 @@ export default function CmsAccessCard({ compact = false, onOpenCms }: Props) {
         {!!onOpenCms && (
           <Pressable
             onPress={onOpenCms}
+            onFocus={() => setOpenFocused(true)}
+            onBlur={() => setOpenFocused(false)}
             style={({ pressed }) => [
               styles.openBtn,
+              openFocused ? styles.focusedActionBtn : null,
               pressed ? styles.openBtnActive : null,
             ]}
             focusable
             accessible
+            hasTVPreferredFocus={preferredFocusTarget === "openCms"}
           >
             <Text style={styles.openBtnText}>Open CMS</Text>
           </Pressable>
@@ -80,12 +91,16 @@ export default function CmsAccessCard({ compact = false, onOpenCms }: Props) {
           />
           <Pressable
             onPress={onSaveName}
+            onFocus={() => setSaveFocused(true)}
+            onBlur={() => setSaveFocused(false)}
             style={({ pressed }) => [
               styles.saveBtn,
+              saveFocused ? styles.focusedActionBtn : null,
               pressed ? styles.saveBtnActive : null,
             ]}
             focusable
             accessible
+            hasTVPreferredFocus={preferredFocusTarget === "saveName"}
           >
             <Text style={styles.saveBtnText}>Save</Text>
           </Pressable>
@@ -161,6 +176,14 @@ const styles = StyleSheet.create({
   openBtnActive: {
     backgroundColor: "#43a6ff",
     borderColor: "#9ad0ff",
+  },
+  focusedActionBtn: {
+    transform: [{ scale: 1.04 }],
+    borderColor: "#bdf1ff",
+    shadowColor: "#6ce8ff",
+    shadowOpacity: 0.45,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
   },
   openBtnText: {
     color: "#ffffff",

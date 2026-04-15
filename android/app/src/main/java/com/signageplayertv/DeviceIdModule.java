@@ -41,6 +41,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.lang.ref.WeakReference;
 
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
@@ -61,6 +62,7 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
     private static final int MAIN_REOPEN_REQ_CODE = 7201;
     private static final int SERVICE_REOPEN_REQ_CODE = 7202;
     private static final int PICK_MEDIA_REQ_CODE = 8101;
+    private static WeakReference<ReactApplicationContext> sharedReactContextRef = new WeakReference<>(null);
 
     private final ReactApplicationContext reactContext;
     private Promise pendingMediaPickerPromise;
@@ -71,6 +73,7 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
     DeviceIdModule(ReactApplicationContext context) {
         super(context);
         this.reactContext = context;
+        sharedReactContextRef = new WeakReference<>(context);
         EmbeddedCmsRuntime.attachReactContext(context);
         context.addActivityEventListener(this);
     }
@@ -88,6 +91,20 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
     @ReactMethod
     public void removeListeners(double count) {
         // Required by NativeEventEmitter on Android.
+    }
+
+    public static void emitRemoteKeyEvent(String eventType, int action) {
+        try {
+            ReactApplicationContext context = sharedReactContextRef.get();
+            if (context == null || !context.hasActiveReactInstance()) return;
+            WritableMap payload = Arguments.createMap();
+            payload.putString("eventType", String.valueOf(eventType == null ? "" : eventType));
+            payload.putInt("eventKeyAction", action);
+            context
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                    .emit("tvRemoteKey", payload);
+        } catch (Exception ignored) {
+        }
     }
 
     @ReactMethod

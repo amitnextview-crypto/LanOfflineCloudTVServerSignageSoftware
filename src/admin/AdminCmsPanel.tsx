@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
-  BackHandler,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -19,14 +18,21 @@ import {
 type Props = {
   visible: boolean;
   onClose: () => void;
-  initialView?: "access" | "cms";
+  view: "access" | "cms";
+  onViewChange: (view: "access" | "cms") => void;
+  orientation?: string;
 };
 
-export default function AdminCmsPanel({ visible, onClose, initialView = "access" }: Props) {
+export default function AdminCmsPanel({
+  visible,
+  onClose,
+  view,
+  onViewChange,
+  orientation = "horizontal",
+}: Props) {
   const slide = useRef(new Animated.Value(400)).current;
   const webRef = useRef<WebView>(null);
   const [cmsUrl, setCmsUrl] = useState("http://127.0.0.1:8080");
-  const [currentView, setCurrentView] = useState<"access" | "cms">(initialView);
   const [backFocused, setBackFocused] = useState(false);
 
   useEffect(() => {
@@ -34,27 +40,6 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
     const info = getCmsAccessInfo();
     setCmsUrl(info.localUrl || "http://127.0.0.1:8080");
   }, []);
-
-  useEffect(() => {
-    if (visible) {
-      setCurrentView(initialView);
-    }
-  }, [visible, initialView]);
-
-  useEffect(() => {
-    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (visible && currentView === "cms" && initialView === "access") {
-        setCurrentView("access");
-        return true;
-      }
-      if (visible) {
-        onClose();
-        return true;
-      }
-      return false;
-    });
-    return () => subscription.remove();
-  }, [currentView, initialView, onClose, visible]);
 
   useEffect(() => {
     Animated.timing(slide, {
@@ -66,7 +51,7 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
 
   if (!visible) return null;
 
-  const nativeTvCmsUrl = `${cmsUrl}${cmsUrl.includes("?") ? "&" : "?"}tv=1`;
+  const nativeTvCmsUrl = `${cmsUrl}${cmsUrl.includes("?") ? "&" : "?"}tv=1&ori=${encodeURIComponent(String(orientation || "horizontal"))}`;
 
   const postWebEvent = (type: string, payload: Record<string, any>) => {
     const script = `
@@ -125,7 +110,7 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
 
   return (
     <Animated.View style={[styles.overlay, { transform: [{ translateX: slide }] }]}>
-      {currentView === "cms" ? (
+      {view === "cms" ? (
         <View style={styles.fullscreenWrap}>
           <View style={styles.header}>
             <View style={styles.headerCopy}>
@@ -133,10 +118,7 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
               <Text style={styles.subtitle}>TV CMS mirrors browser features and uses the native TV picker for uploads.</Text>
             </View>
             <TouchableOpacity
-              onPress={() => {
-                if (initialView === "access") setCurrentView("access");
-                else onClose();
-              }}
+              onPress={onClose}
               onFocus={() => setBackFocused(true)}
               onBlur={() => setBackFocused(false)}
               activeOpacity={0.8}
@@ -169,6 +151,22 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
               bounces={false}
               showsVerticalScrollIndicator={false}
               showsHorizontalScrollIndicator={false}
+              injectedJavaScript={`
+                (function() {
+                  function focusFirst() {
+                    var first = document.querySelector('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+                    if (first && typeof first.focus === 'function') first.focus();
+                  }
+                  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                    setTimeout(focusFirst, 120);
+                  } else {
+                    document.addEventListener('DOMContentLoaded', function() {
+                      setTimeout(focusFirst, 120);
+                    }, { once: true });
+                  }
+                })();
+                true;
+              `}
               onMessage={(event) => {
                 const raw = String(event?.nativeEvent?.data || "").trim();
                 let parsed: any = null;
@@ -203,8 +201,8 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
         <>
           <View style={styles.header}>
             <View style={styles.headerCopy}>
-              <Text style={styles.title}>Admin Panel</Text>
-              <Text style={styles.subtitle}>TV-hosted CMS is running locally.</Text>
+              <Text style={styles.title}>QR Access</Text>
+              <Text style={styles.subtitle}>Use remote arrows to move focus. Press OK to open CMS.</Text>
             </View>
             <TouchableOpacity
               onPress={onClose}
@@ -215,7 +213,7 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
                 styles.iconBtn,
                 backFocused ? styles.iconBtnActive : null,
               ]}
-              focusable
+              focusable={false}
               accessible
             >
               <Text style={styles.iconBtnText}>X</Text>
@@ -223,7 +221,11 @@ export default function AdminCmsPanel({ visible, onClose, initialView = "access"
           </View>
 
           <View style={styles.content}>
-            <CmsAccessCard compact onOpenCms={() => setCurrentView("cms")} />
+            <CmsAccessCard
+              compact
+              onOpenCms={() => onViewChange("cms")}
+              preferredFocusTarget="openCms"
+            />
           </View>
         </>
       )}

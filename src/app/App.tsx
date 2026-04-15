@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
+  BackHandler,
   Dimensions,
   NativeEventEmitter,
   Easing,
@@ -70,6 +71,7 @@ const SMALL_CACHE_BLOCK_BYTES = 30 * 1024 * 1024;
 const STARTUP_DEFER_MS = 2500;
 const MAX_DIAGNOSTIC_EVENTS = 24;
 const DEVICE_META_CACHE_MS = 30000;
+const TV_BACK_DOUBLE_PRESS_MS = 1300;
 
 type RuntimeErrorInfo = {
   message: string;
@@ -199,6 +201,7 @@ export default function App() {
   const errorClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offlineNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offlineNoticeRef = useRef("");
+  const offlineNoticeDismissedRef = useRef(false);
   const lastPlaybackHealthEmitAtRef = useRef(0);
   const networkQualityRef = useRef("unknown");
   const playbackStatsRef = useRef({
@@ -225,6 +228,74 @@ export default function App() {
     configBytes: 0,
     cacheBytes: 0,
   });
+  const lastTvBackPressAtRef = useRef(0);
+  const adminOpenedByBackRef = useRef(false);
+
+  const openAdminPanel = (view: "access" | "cms", options: { openedByBack?: boolean } = {}) => {
+    setAdminInitialView(view);
+    setShowAdmin(true);
+    adminOpenedByBackRef.current = !!options.openedByBack;
+    if (view === "cms") {
+      lastTvBackPressAtRef.current = 0;
+    }
+  };
+
+  const closeAdminPanel = () => {
+    setShowAdmin(false);
+    adminOpenedByBackRef.current = false;
+    lastTvBackPressAtRef.current = 0;
+  };
+
+  const handleTvBackAction = useCallback(() => {
+    const now = Date.now();
+
+    if (showAdmin) {
+      if (adminInitialView === "cms") {
+        closeAdminPanel();
+        return true;
+      }
+      if (
+        adminOpenedByBackRef.current &&
+        lastTvBackPressAtRef.current > 0 &&
+        now - lastTvBackPressAtRef.current <= TV_BACK_DOUBLE_PRESS_MS
+      ) {
+        openAdminPanel("cms");
+        return true;
+      }
+      closeAdminPanel();
+      return true;
+    }
+
+    if (now - lastTvBackPressAtRef.current <= TV_BACK_DOUBLE_PRESS_MS) {
+      openAdminPanel("cms");
+      return true;
+    }
+
+    lastTvBackPressAtRef.current = now;
+    openAdminPanel("access", { openedByBack: true });
+    return true;
+  }, [adminInitialView, showAdmin]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener("hardwareBackPress", handleTvBackAction);
+    return () => subscription.remove();
+  }, [handleTvBackAction]);
+
+  useEffect(() => {
+    const nativeDeviceModule = (NativeModules as any)?.DeviceIdModule;
+    if (!nativeDeviceModule) return;
+    const emitter = new NativeEventEmitter(nativeDeviceModule);
+    const sub = emitter.addListener("tvRemoteKey", (event: any) => {
+      const eventType = String(event?.eventType || "").toLowerCase();
+      const keyAction = Number(event?.eventKeyAction ?? -1);
+      if (eventType !== "back") return;
+      if (keyAction !== -1 && keyAction !== 1) return;
+      handleTvBackAction();
+    });
+    return () => {
+      sub.remove();
+    };
+  }, [handleTvBackAction]);
 
   useEffect(() => {
     offlineNoticeRef.current = offlineNotice;
@@ -934,6 +1005,7 @@ export default function App() {
         const hasInternet = !!networkState?.internet;
         const connected = !!networkState?.connected;
         if (hasInternet || connected) {
+          offlineNoticeDismissedRef.current = false;
           if (offlineNoticeRef.current) setOfflineNotice("");
           return;
         }
@@ -943,7 +1015,9 @@ export default function App() {
           "Offline mode"
         );
 
-        setOfflineNotice("Internet not connected. Running in offline mode.");
+        if (!offlineNoticeDismissedRef.current) {
+          setOfflineNotice("Internet not connected. Running in offline mode.");
+        }
 
         if (ENABLE_AUTO_WIFI_RECOVERY && nativeDeviceModule?.tryRecoverInternet) {
           const recovery = nativeDeviceModule.tryRecoverInternet();
@@ -979,10 +1053,13 @@ export default function App() {
         const hasInternet = !!networkState?.internet;
         const connected = !!networkState?.connected;
         if (hasInternet || connected) {
+          offlineNoticeDismissedRef.current = false;
           if (offlineNoticeRef.current) setOfflineNotice("");
           return;
         }
-        setOfflineNotice("Internet not connected. Running in offline mode.");
+        if (!offlineNoticeDismissedRef.current) {
+          setOfflineNotice("Internet not connected. Running in offline mode.");
+        }
       } catch {
       }
     };
@@ -1936,20 +2013,16 @@ export default function App() {
         <View style={styles.bgGlowTop} />
         <View style={styles.bgGlowBottom} />
         <AdminButton
-          side="left"
-          icon={"\u2699"}
-          onOpen={() => {
-            setAdminInitialView("access");
-            setShowAdmin(true);
-          }}
-        />
-        <AdminButton
           side="right"
           icon={"\u25A6"}
-          onOpen={() => {
-            setAdminInitialView("cms");
-            setShowAdmin(true);
-          }}
+          hasTVPreferredFocus={!showAdmin}
+          onOpen={() => openAdminPanel("cms")}
+        />
+        <AdminButton
+          side="left"
+          icon={"\u2699"}
+          focusable={false}
+          onOpen={() => openAdminPanel("access")}
         />
 
         <View style={styles.connectCard}>
@@ -2112,26 +2185,41 @@ export default function App() {
           />
         </PlayerErrorBoundary>
         <AdminButton
-          side="left"
-          icon={"\u2699"}
-          onOpen={() => {
-            setAdminInitialView("access");
-            setShowAdmin(true);
-          }}
-        />
-        <AdminButton
           side="right"
           icon={"\u25A6"}
-          onOpen={() => {
-            setAdminInitialView("cms");
-            setShowAdmin(true);
-          }}
+          hasTVPreferredFocus={!showAdmin}
+          onOpen={() => openAdminPanel("cms")}
+        />
+        <AdminButton
+          side="left"
+          icon={"\u2699"}
+          focusable={false}
+          onOpen={() => openAdminPanel("access")}
         />
         <AdminCmsPanel
           visible={showAdmin}
-          initialView={adminInitialView}
-          onClose={() => setShowAdmin(false)}
+          view={adminInitialView}
+          onViewChange={setAdminInitialView}
+          onClose={closeAdminPanel}
+          orientation={orientation}
         />
+        {offlineNotice ? (
+          <View style={styles.offlineToast}>
+            <Text style={styles.offlineToastText}>{offlineNotice}</Text>
+            <Pressable
+              onPress={() => {
+                offlineNoticeDismissedRef.current = true;
+                setOfflineNotice("");
+              }}
+              style={({ pressed }) => [
+                styles.offlineToastClose,
+                pressed ? styles.offlineToastClosePressed : null,
+              ]}
+            >
+              <Text style={styles.offlineToastCloseText}>x</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
       {lastError ? (
         <View style={styles.errorToast}>
@@ -2140,20 +2228,6 @@ export default function App() {
           {lastError.detail ? (
             <Text style={styles.errorToastDetail}>{lastError.detail}</Text>
           ) : null}
-        </View>
-      ) : null}
-      {offlineNotice ? (
-        <View style={styles.offlineToast}>
-          <Text style={styles.offlineToastText}>{offlineNotice}</Text>
-          <Pressable
-            onPress={() => setOfflineNotice("")}
-            style={({ pressed }) => [
-              styles.offlineToastClose,
-              pressed ? styles.offlineToastClosePressed : null,
-            ]}
-          >
-            <Text style={styles.offlineToastCloseText}>x</Text>
-          </Pressable>
         </View>
       ) : null}
       {apkUpdateState.visible ? (

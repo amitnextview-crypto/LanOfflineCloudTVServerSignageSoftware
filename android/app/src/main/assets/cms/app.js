@@ -56,6 +56,13 @@ const DEVICE_SCAN_PORTS = (() => {
   const currentPort = Number(window.location.port || "8080") || 8080;
   return Array.from(new Set([currentPort, 8080, 8081, 9090, 10080]));
 })();
+const PLAYER_ORIENTATION = (() => {
+  try {
+    return String(new URLSearchParams(window.location.search).get("ori") || "horizontal").trim().toLowerCase();
+  } catch (_e) {
+    return "horizontal";
+  }
+})();
 let subnetScanInFlight = null;
 let lastSubnetScanAt = 0;
 let localNetworkState = {
@@ -69,6 +76,86 @@ const tvPickedState = {
   2: { count: 0, ready: false },
   3: { count: 0, ready: false },
 };
+
+function updateViewportHeightVar() {
+  try {
+    const root = document.documentElement;
+    if (!root) return;
+    root.style.setProperty("--tvvh", `${Math.max(window.innerHeight || 0, 1)}px`);
+    root.style.setProperty("--tvvw", `${Math.max(window.innerWidth || 0, 1)}px`);
+  } catch (_e) {
+  }
+}
+
+function applyPlayerOrientationClass() {
+  const body = document.body;
+  if (!body) return;
+  body.classList.remove(
+    "player-orientation-horizontal",
+    "player-orientation-reverse-horizontal",
+    "player-orientation-vertical",
+    "player-orientation-reverse-vertical"
+  );
+  body.classList.add(`player-orientation-${PLAYER_ORIENTATION}`);
+}
+
+function getFocusableElementsForTv() {
+  return Array.from(
+    document.querySelectorAll("button, input, select, textarea, [tabindex]:not([tabindex='-1'])")
+  ).filter((el) => {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el.hasAttribute("disabled")) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    if (el.classList.contains("hidden")) return false;
+    if (el.offsetParent === null) return false;
+    return true;
+  });
+}
+
+function focusNearestElementByDirection(direction) {
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const focusables = getFocusableElementsForTv();
+  if (!focusables.length) return false;
+  if (!active || !focusables.includes(active)) {
+    focusables[0].focus();
+    return true;
+  }
+
+  const currentRect = active.getBoundingClientRect();
+  const currentCenterX = currentRect.left + currentRect.width / 2;
+  const currentCenterY = currentRect.top + currentRect.height / 2;
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  focusables.forEach((el) => {
+    if (el === active) return;
+    const rect = el.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const deltaX = centerX - currentCenterX;
+    const deltaY = centerY - currentCenterY;
+
+    if (direction === "right" && deltaX <= 8) return;
+    if (direction === "left" && deltaX >= -8) return;
+    if (direction === "down" && deltaY <= 8) return;
+    if (direction === "up" && deltaY >= -8) return;
+
+    const primary = direction === "left" || direction === "right" ? Math.abs(deltaX) : Math.abs(deltaY);
+    const secondary = direction === "left" || direction === "right" ? Math.abs(deltaY) : Math.abs(deltaX);
+    const score = primary + secondary * 2.4;
+
+    if (score < bestScore) {
+      bestScore = score;
+      best = el;
+    }
+  });
+
+  if (best instanceof HTMLElement) {
+    best.focus();
+    return true;
+  }
+  return false;
+}
 
 function setLoaderVisibility(visible) {
   const loader = document.getElementById("uploadLoader");
@@ -3599,9 +3686,12 @@ window.__cmsGetAccessOverrides = () => ({ ...(cmsAccessOverrides || {}) });
 window.__cmsReloadAccessOverrides = loadAccessOverrides;
 
   document.addEventListener("DOMContentLoaded", async () => {
+  updateViewportHeightVar();
+  window.addEventListener("resize", updateViewportHeightVar);
     if (IS_TV_COMPACT_MODE) {
       document.body.classList.add("tv-compact-mode");
     }
+  applyPlayerOrientationClass();
 
   renderGrid3LayoutOptions();
   updateScheduleFallbackVisibility();
@@ -3689,27 +3779,29 @@ window.__cmsReloadAccessOverrides = loadAccessOverrides;
   });
 
   document.addEventListener("keydown", (event) => {
-    const active = document.activeElement;
-    if (!(active instanceof HTMLInputElement) || active.type !== "range") return;
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
-    const focusables = Array.from(
-      document.querySelectorAll("button, input, select, textarea, [tabindex]:not([tabindex='-1'])")
-    ).filter((el) => {
-      if (!(el instanceof HTMLElement)) return false;
-      if (el.hasAttribute("disabled")) return false;
-      if (el.getAttribute("aria-hidden") === "true") return false;
-      if (el.offsetParent === null) return false;
-      return true;
-    });
+    if (active instanceof HTMLInputElement && active.type === "range" && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      const moved = focusNearestElementByDirection(event.key === "ArrowDown" ? "down" : "up");
+      if (moved) event.preventDefault();
+      return;
+    }
 
-    const index = focusables.indexOf(active);
-    if (index < 0) return;
-    const nextIndex = event.key === "ArrowDown" ? index + 1 : index - 1;
-    const target = focusables[nextIndex];
-    if (target instanceof HTMLElement) {
-      event.preventDefault();
-      target.focus();
+    if (!IS_TV_COMPACT_MODE) return;
+    if (event.key === "ArrowRight") {
+      if (focusNearestElementByDirection("right")) event.preventDefault();
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      if (focusNearestElementByDirection("left")) event.preventDefault();
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      if (focusNearestElementByDirection("down")) event.preventDefault();
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      if (focusNearestElementByDirection("up")) event.preventDefault();
     }
   });
 
