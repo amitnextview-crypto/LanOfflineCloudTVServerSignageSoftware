@@ -1,0 +1,9 @@
+{
+  "password": {
+    "algorithm": "pbkdf2-sha512",
+    "salt": "bc146411f6422299ab1eda9d8b4ec5f0",
+    "iterations": 120000,
+    "hash": "e7c50f3d19132b838f5cfee0de7e2f53fe5900e141dc01be0208e7025f1ffccbf4d7434179631d2b71a56784a18b38fa9b848bcac117fa9e1a83aa4331bcc52b",
+    "updatedAt": "2026-04-24T10:21:35.936Z"
+  }
+}

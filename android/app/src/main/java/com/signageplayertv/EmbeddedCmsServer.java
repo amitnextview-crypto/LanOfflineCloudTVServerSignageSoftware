@@ -214,6 +214,9 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
             if ("/config/access-url".equals(uri) && Method.POST.equals(session.getMethod())) {
                 return handleAccessUrlUpdate(session);
             }
+            if ("/config/clear-section-media".equals(uri) && Method.POST.equals(session.getMethod())) {
+                return handleClearSectionMedia(session);
+            }
             if ("/config/bulk-action".equals(uri) && Method.POST.equals(session.getMethod())) {
                 return handleBulkAction(session);
             }
@@ -799,6 +802,16 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
         return json(out);
     }
 
+    private Response handleClearSectionMedia(IHTTPSession session) throws Exception {
+        JSONObject body = readJsonBody(session);
+        int section = safeInt(String.valueOf(body.opt("section")), 1);
+        clearSectionMedia(section);
+        JSONObject out = new JSONObject();
+        out.put("success", true);
+        out.put("section", section);
+        return json(out);
+    }
+
     private Response handleAutoReopen(IHTTPSession session) throws Exception {
         JSONObject body = readJsonBody(session);
         boolean enabled = body.optBoolean("enabled", true);
@@ -1169,6 +1182,29 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
     private File getSectionActiveFile(int section) {
         File sectionBase = getSectionBase(section);
         return new File(sectionBase.getAbsolutePath() + "__active.txt");
+    }
+
+    private void clearSectionMedia(int section) throws Exception {
+        int safeSection = Math.max(1, Math.min(3, section));
+        deleteRecursively(getSectionBase(safeSection));
+        deleteRecursively(getSectionVersionsDir(safeSection));
+        deleteRecursively(getSectionActiveFile(safeSection));
+        clearVideoCache();
+
+        JSONObject timeline = new JSONObject();
+        timeline.put("section", safeSection);
+        timeline.put("cycleId", safeSection + "-cleared-" + System.currentTimeMillis());
+        timeline.put("syncAt", System.currentTimeMillis());
+        timeline.put("updatedAt", System.currentTimeMillis());
+        timeline.put("fileCount", 0);
+        timeline.put("mediaSignature", "");
+        timeline.put("targetDevice", "all");
+
+        JSONObject payload = new JSONObject();
+        payload.put("section", safeSection);
+        payload.put("syncAt", System.currentTimeMillis());
+        payload.put("timeline", timeline);
+        EmbeddedCmsRuntime.emitEvent("media-updated", payload);
     }
 
     private String buildVersionName() {

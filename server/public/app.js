@@ -239,9 +239,12 @@ function updateUploadProgress(percent, statusText) {
 function getPendingUploadFiles(section) {
   const safeSection = Number(section || 0);
   if (!safeSection) return [];
-  return Array.isArray(pendingUploadSelections[safeSection])
+  const cached = Array.isArray(pendingUploadSelections[safeSection])
     ? pendingUploadSelections[safeSection]
     : [];
+  if (cached.length) return cached;
+  const input = document.getElementById(`media${safeSection}`);
+  return Array.from(input?.files || []);
 }
 
 function updateUploadSelectionStatus(section) {
@@ -288,6 +291,29 @@ function clearUploadSelection(section) {
     [safeSection]: [],
   };
   updateUploadSelectionStatus(safeSection);
+}
+
+async function clearUnusedSectionsForLayout(targetDevice, layout = "fullscreen") {
+  const maxSection = sectionCount(layout);
+  const sectionsToClear = [];
+  for (let section = maxSection + 1; section <= 3; section += 1) {
+    sectionsToClear.push(section);
+  }
+  if (!sectionsToClear.length) return;
+
+  await Promise.allSettled(sectionsToClear.map((section) =>
+    fetch("/config/clear-section-media", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetDevice, section }),
+    })
+  ));
+
+  sectionsToClear.forEach((section) => {
+    previewMediaBySection[section] = [];
+    clearUploadSelection(section);
+  });
+  renderScreenPreview();
 }
 
 function validateUploadFiles(fileList) {
@@ -2080,7 +2106,6 @@ function renderUploadSections() {
       <div>
         <h3>Section ${i}</h3>
         <div class="source-controls">
-          <label>Source Type</label>
           <select id="sourceType${i}" onchange="onSectionSourceChange(${i})">
             <option value="multimedia">Multimedia (Image/Video)</option>
             <option value="web">Website URL</option>
@@ -2157,6 +2182,7 @@ async function uploadMedia(section) {
   }
 
   const loader = document.getElementById("uploadLoader");
+  captureUploadSelection(section);
   const files = getPendingUploadFiles(section);
 
   const { errors, warnings, validFiles, totalSize } = validateUploadFiles(files);
@@ -2389,6 +2415,7 @@ async function saveConfig() {
     return;
   }
 
+  await clearUnusedSectionsForLayout(targetDevice, config.layout || "fullscreen");
   showNotice("success", "Settings Saved", "Configuration has been applied successfully.");
 
   if (window.ReactNativeWebView) {

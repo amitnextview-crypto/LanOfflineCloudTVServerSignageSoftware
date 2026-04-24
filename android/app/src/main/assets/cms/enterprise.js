@@ -199,7 +199,16 @@
     document.body.classList.remove("cms-auth-locked");
   }
 
+  function setManageFeedback(type = "success", message = "") {
+    const el = byId("enterpriseModalFeedback");
+    if (!el) return;
+    const safeMessage = String(message || "").trim();
+    el.className = `enterprise-inline-feedback${safeMessage ? ` is-${type || "success"}` : ""}${safeMessage ? "" : " hidden"}`;
+    el.textContent = safeMessage;
+  }
+
   function openManageModal(section = "") {
+    setManageFeedback("", "");
     byId("enterpriseModal")?.classList.remove("hidden");
     if (section === "groups") {
       byId("enterpriseGroupsSection")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -207,6 +216,7 @@
   }
 
   function closeManageModal() {
+    setManageFeedback("", "");
     byId("enterpriseModal")?.classList.add("hidden");
   }
 
@@ -348,15 +358,32 @@
     persistActiveGroupId("");
   }
 
-  async function clearActiveGroupSelection() {
+  async function clearActiveGroupSelection(options = {}) {
     deactivateActiveGroupSelection();
+    const compactSelect = byId("compactGroupSelect");
+    if (compactSelect) compactSelect.value = "";
+    if (options.preserveSelection) {
+      renderGroups();
+      return;
+    }
     await applySelectedDevices([], { refreshGroups: true });
+    if (!options.silent) {
+      setManageFeedback("", "");
+    }
   }
 
   async function syncActiveGroupSelection() {
+    if (!state.activeGroupId) {
+      const compactSelect = byId("compactGroupSelect");
+      if (compactSelect) compactSelect.value = "";
+      return;
+    }
     const activeGroup = state.groups.find((item) => item.id === state.activeGroupId);
     if (!activeGroup) {
-      clearActiveGroupSelection();
+      deactivateActiveGroupSelection();
+      const compactSelect = byId("compactGroupSelect");
+      if (compactSelect) compactSelect.value = "";
+      renderGroups();
       return;
     }
     await applySelectedDevices(
@@ -646,6 +673,7 @@
   async function saveGroup() {
     const name = String(byId("enterpriseGroupName")?.value || "").trim();
     const selectedDevices = Array.from(state.selectedDevices);
+    setManageFeedback("", "");
     if (!name) {
       notice("warning", "Group Name Required", "Enter a group name first.");
       return;
@@ -681,8 +709,8 @@
     state.activeGroupId = String(saved?.group?.id || "").trim();
     persistActiveGroupId(state.activeGroupId);
     byId("enterpriseGroupName").value = "";
-    closeManageModal();
-    notice("success", "Group Saved", `${name} is ready.`);
+    setManageFeedback("success", `${name} group saved successfully.`);
+    byId("enterpriseModalFeedback")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function sendPresetAction(kind) {
@@ -758,8 +786,7 @@
       body: JSON.stringify({ deviceName: nextName }),
     });
     byId("enterpriseRenameValue").value = "";
-    await refreshDevices();
-    await refreshGroups();
+    await Promise.all([refreshDevices(), refreshGroups()]);
     notice("success", "Device Renamed", `Device renamed to ${nextName}.`);
   }
 
@@ -965,6 +992,7 @@
   window.enterpriseLogin = login;
   window.enterpriseGetAuthPassword = getStoredAuthPassword;
   window.enterpriseQuickApplyGroup = quickApplyGroup;
+  window.enterpriseClearActiveGroupSelection = clearActiveGroupSelection;
   window.enterpriseOpenManageModal = openManageModal;
   window.enterpriseCloseManageModal = closeManageModal;
 

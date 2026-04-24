@@ -34,11 +34,9 @@
           <div class="device-toolbar">
             <div>
               <h2>Select Device</h2>
-              <p class="section-help">Select all devices or choose only the TVs you want to update.</p>
             </div>
             <div class="selection-buttons selection-buttons-inline">
               <button id="deviceDashboardBtn" class="btn primary compact-btn" type="button" onclick="toggleDeviceDashboard()">Device Dashboard</button>
-              <button id="manageDevicesBtn" class="btn primary compact-btn" type="button" onclick="window.enterpriseOpenManageModal?.('groups')">Manage Devices</button>
             </div>
           </div>
           <div class="selection-actions">
@@ -72,22 +70,9 @@
         </section>
 
         <section class="card compact-card">
-          <h2>Upload Media</h2>
-          <p class="section-help">Upload media by section. Existing section files will be replaced after successful upload.</p>
-          <p class="section-help">PDF files are converted into image pages before upload so devices can switch pages instantly.</p>
-          <div id="uploadBehaviorCard" class="sub-card">
-            <h3>Upload Behavior</h3>
-            <p class="section-help">Browser uploads run in queue mode so large files can be sent to multiple TVs more safely.</p>
-            <div class="upload-behavior-grid">
-              <label for="uploadTimeoutMinutes">Upload Timeout (minutes)</label>
-              <input type="number" id="uploadTimeoutMinutes" min="10" max="120" step="1" value="15" />
-            </div>
-          </div>
-          <div id="uploadSections"></div>
-
+          <h2>App Update</h2>
+          <p class="section-help">Upload latest APK and push update command to selected device.</p>
           <div id="appUpdateCard" class="sub-card alerts-card">
-            <h3>App Update</h3>
-            <p class="section-help">Upload latest APK and push update command to selected device.</p>
             <div class="update-box">
               <input type="file" id="appUpdateFile" accept=".apk,application/vnd.android.package-archive" />
               <button class="btn primary" type="button" onclick="uploadAndInstallAppUpdate()">Upload And Update App</button>
@@ -129,6 +114,20 @@
             <h3 id="gridLayoutTitle">Grid 3 Layout Options</h3>
             <p class="section-help">Select the exact arrangement you want on screen.</p>
             <div id="grid3LayoutOptions" class="layout-options"></div>
+          </div>
+
+          <div class="sub-card upload-media-card">
+            <div class="upload-media-header">
+              <div>
+                <h3>Upload Media</h3>
+                <p class="section-help">Choose source, pick files, and upload directly to the selected TVs.</p>
+              </div>
+              <div id="uploadBehaviorCard" class="upload-behavior-card">
+                <label for="uploadTimeoutMinutes">Upload Timeout (minutes)</label>
+                <input type="number" id="uploadTimeoutMinutes" min="10" max="120" step="1" value="15" />
+              </div>
+            </div>
+            <div id="uploadSections" class="section-controls-row upload-sections-grid"></div>
           </div>
 
           <div class="sub-card">
@@ -333,6 +332,7 @@
 
     <div id="enterpriseModal" class="dashboard-overlay hidden">
       <div class="dashboard-panel enterprise-modal-panel">
+        <div id="enterpriseModalFeedback" class="enterprise-inline-feedback hidden"></div>
         <div class="dashboard-header">
           <div>
             <h2>Manage Devices</h2>

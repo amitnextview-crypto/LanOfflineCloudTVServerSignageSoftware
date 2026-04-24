@@ -167,16 +167,40 @@ h3 {
   gap: 8px;
 }
 
+.upload-media-card {
+  display: grid;
+  gap: 12px;
+}
+
+.upload-media-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.upload-behavior-card {
+  display: grid;
+  gap: 8px;
+  min-width: min(230px, 100%);
+  padding: 10px 12px;
+  border: 1px solid rgba(138, 199, 239, 0.16);
+  border-radius: 12px;
+  background: rgba(7, 15, 24, 0.54);
+}
+
 .upload-behavior-grid {
   display: grid;
   gap: 8px;
 }
 
+.upload-behavior-card label,
 .upload-behavior-grid label {
   font-size: 12px;
   color: var(--muted);
 }
 
+.upload-behavior-card input,
 .upload-behavior-grid input {
   width: min(220px, 100%);
 }
@@ -364,6 +388,7 @@ h3 {
   background: rgba(4, 10, 16, 0.72);
   backdrop-filter: blur(4px);
   padding: 20px;
+  overflow: auto;
 }
 
 .dashboard-panel {
@@ -380,6 +405,35 @@ h3 {
 
 .enterprise-modal-panel {
   width: min(1280px, 97vw);
+}
+
+.enterprise-inline-feedback {
+  margin-bottom: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(124, 190, 231, 0.24);
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #eaf7ff;
+  background: rgba(10, 20, 30, 0.84);
+}
+
+.enterprise-inline-feedback.is-success {
+  border-color: rgba(53, 225, 200, 0.5);
+  background: rgba(11, 44, 40, 0.7);
+  color: #a9f8ea;
+}
+
+.enterprise-inline-feedback.is-warning {
+  border-color: rgba(247, 165, 63, 0.48);
+  background: rgba(56, 34, 10, 0.72);
+  color: #ffd7a0;
+}
+
+.enterprise-inline-feedback.is-error {
+  border-color: rgba(239, 95, 114, 0.5);
+  background: rgba(58, 18, 25, 0.72);
+  color: #ffbdc7;
 }
 
 .dashboard-header {
@@ -912,17 +966,20 @@ input[type="range"] {
   display: none !important;
 }
 
+#uploadSections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
 #uploadSections > div {
-  padding: 9px;
-  border: 1px solid rgba(130, 196, 237, 0.2);
-  border-radius: 12px;
-  margin-bottom: 12px;
-  background: rgba(255, 255, 255, 0.04);
+  margin-bottom: 0;
 }
 
 .upload-section-card {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  align-content: start;
 }
 
 #uploadSections h3 {
@@ -930,25 +987,28 @@ input[type="range"] {
 }
 
 #uploadSections button {
-  margin-top: 6px;
+  margin-top: 0;
 }
 
 .upload-row {
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: 8px;
-  flex-wrap: nowrap;
+  align-items: stretch;
 }
 
-.upload-row input[type="file"] {
-  flex: 1;
-  min-width: 0;
+.upload-row label,
+.upload-source-url-wrap label {
+  display: block;
+  margin: 0;
+  color: #dfefff;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.upload-row button {
-  margin-top: 0 !important;
-  white-space: nowrap;
-  flex-shrink: 0;
+.upload-row input[type="file"],
+.upload-file-input,
+.upload-action-row .btn {
+  width: 100%;
 }
 
 .source-controls {
@@ -963,8 +1023,21 @@ input[type="range"] {
   margin: 0;
 }
 
+.source-controls-stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.upload-source-url-wrap {
+  display: grid;
+  gap: 8px;
+}
+
 .source-url-input {
-  margin-bottom: 8px;
+  margin-bottom: 0;
+}
+
+.upload-action-row {
+  display: grid;
 }
 
 .main-grid {
@@ -1612,6 +1685,11 @@ body.tv-compact-mode .source-controls {
 
 .enterprise-group-editor {
   align-self: start;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(124, 190, 231, 0.18);
+  background: rgba(9, 17, 26, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .enterprise-form.inline {
@@ -1809,6 +1887,11 @@ body.tv-compact-mode .source-controls {
     grid-template-columns: 1fr;
   }
 
+  .upload-media-header,
+  .device-toolbar {
+    flex-direction: column;
+  }
+
   .enterprise-header {
     flex-direction: column;
   }
@@ -1843,6 +1926,32 @@ body.tv-compact-mode .source-controls {
 
   .selection-buttons-inline .btn {
     flex: 1 1 0;
+  }
+
+  .compact-groups-card .device-toolbar .btn {
+    margin-bottom: 8px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .main-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
+  }
+
+  .left-col,
+  .middle-col,
+  .right-col {
+    height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .dashboard-panel,
+  .enterprise-modal-panel {
+    width: min(100%, 1000px);
+    max-height: none;
   }
 }
 

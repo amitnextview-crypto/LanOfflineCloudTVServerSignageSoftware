@@ -14,6 +14,7 @@ const MIN_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_UPLOAD_TIMEOUT_MS = 120 * 60 * 1000;
 const MULTI_DEVICE_UPLOAD_RETRIES = 2;
 const MULTI_DEVICE_RETRY_DELAY_MS = 1800;
+const MULTI_DEVICE_UPLOAD_CONCURRENCY = 6;
 const UPLOAD_TIMEOUT_STORAGE_KEY = "cmsUploadTimeoutMs";
 
 const GRID3_LAYOUTS = [
@@ -624,12 +625,25 @@ async function handleDeviceSelectionChanged() {
   }
 }
 
+async function clearEnterpriseGroupSelectionSilently() {
+  try {
+    if (typeof window.enterpriseClearActiveGroupSelection === "function") {
+      await window.enterpriseClearActiveGroupSelection({
+        silent: true,
+        preserveSelection: true,
+      });
+    }
+  } catch (_e) {
+  }
+}
+
 async function toggleDeviceSelection(origin, checked) {
   if (checked) {
     selectedDeviceOrigins.add(origin);
   } else {
     selectedDeviceOrigins.delete(origin);
   }
+  await clearEnterpriseGroupSelectionSilently();
   await handleDeviceSelectionChanged();
 }
 
@@ -639,6 +653,7 @@ async function selectAllDevices(checked = true) {
   } else {
     selectedDeviceOrigins = new Set();
   }
+  await clearEnterpriseGroupSelectionSilently();
   await handleDeviceSelectionChanged();
 }
 
@@ -895,9 +910,12 @@ function updateUploadProgress(percent, statusText) {
 function getPendingUploadFiles(section) {
   const safeSection = Number(section || 0);
   if (!safeSection) return [];
-  return Array.isArray(pendingUploadSelections[safeSection])
+  const cached = Array.isArray(pendingUploadSelections[safeSection])
     ? pendingUploadSelections[safeSection]
     : [];
+  if (cached.length) return cached;
+  const input = document.getElementById(`media${safeSection}`);
+  return Array.from(input?.files || []);
 }
 
 function updateUploadSelectionStatus(section) {
@@ -944,6 +962,36 @@ function clearUploadSelection(section) {
     [safeSection]: [],
   };
   updateUploadSelectionStatus(safeSection);
+}
+
+async function clearUnusedSectionsForLayout(origins = [], layout = "fullscreen") {
+  const maxSection = sectionCount(layout);
+  const sectionsToClear = [];
+  for (let section = maxSection + 1; section <= 3; section += 1) {
+    sectionsToClear.push(section);
+  }
+  if (!sectionsToClear.length) return;
+
+  const uniqueOrigins = Array.from(
+    new Set((Array.isArray(origins) ? origins : []).map((origin) => normalizeOrigin(origin)).filter(Boolean))
+  );
+  if (!uniqueOrigins.length) return;
+
+  await Promise.allSettled(uniqueOrigins.flatMap((origin) =>
+    sectionsToClear.map((section) =>
+      fetch(`${origin}/config/clear-section-media`, {
+        method: "POST",
+        headers: buildCmsAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ section }),
+      })
+    )
+  ));
+
+  sectionsToClear.forEach((section) => {
+    previewMediaBySection[section] = [];
+    clearUploadSelection(section);
+  });
+  renderScreenPreview();
 }
 
 window.__cmsSetLoaderVisibility = setLoaderVisibility;
@@ -1164,6 +1212,22 @@ async function uploadToOriginWithRetry(origin, section, buildFormData, tracker, 
     }
   }
   throw lastError || new Error("Upload failed");
+}
+
+async function runUploadsInParallel(targets, concurrency, worker) {
+  const queue = Array.isArray(targets) ? targets.slice() : [];
+  const workerCount = Math.max(1, Math.min(Number(concurrency || 1), queue.length || 1));
+  let nextIndex = 0;
+
+  const runners = Array.from({ length: workerCount }, async (_unused, laneIndex) => {
+    while (nextIndex < queue.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      await worker(queue[currentIndex], currentIndex, laneIndex);
+    }
+  });
+
+  await Promise.all(runners);
 }
 
 function wait(ms) {
@@ -2972,19 +3036,19 @@ function renderUploadSections() {
     pendingUploadSelections[i] = [];
   }
 
-    for (let i = 1; i <= count; i++) {
-      container.innerHTML += `
-        <div class="upload-section-card">
+  for (let i = 1; i <= count; i++) {
+    container.innerHTML += `
+        <div class="section-panel upload-section-card">
             <h3>Section ${i}</h3>
-            <div class="source-controls">
-              <label>Source Type</label>
+            <div class="source-controls source-controls-stacked">
               <select id="sourceType${i}" onchange="onSectionSourceChange(${i})">
             <option value="multimedia">Multimedia (Image/Video)</option>
             <option value="web">Website URL</option>
             <option value="youtube">YouTube URL</option>
           </select>
         </div>
-        <div id="sourceUrlWrap${i}" class="hidden">
+        <div id="sourceUrlWrap${i}" class="hidden upload-source-url-wrap">
+          <label for="sourceUrl${i}">Source URL</label>
           <input
             type="text"
             id="sourceUrl${i}"
@@ -3010,10 +3074,13 @@ function renderUploadSections() {
                 <input
                   type="file"
                   id="media${i}"
+                  class="upload-file-input"
                   multiple
                   accept=".mp4,.m4v,.mov,.mkv,.webm,.jpg,.jpeg,.png,.txt,.pdf,.ppt,.pptx,.pptm,.pps,.ppsx,.potx,video/mp4,video/quicktime,video/webm,image/jpeg,image/png,text/plain,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint.presentation.macroenabled.12,application/vnd.openxmlformats-officedocument.presentationml.slideshow,application/vnd.ms-powerpoint.slideshow.macroenabled.12,application/vnd.openxmlformats-officedocument.presentationml.template"
                 />
-                <button class="btn primary" type="button" onclick="uploadMedia(${i})">Upload Section ${i}</button>
+                <div class="upload-action-row">
+                  <button class="btn primary" type="button" onclick="uploadMedia(${i})">Upload Section ${i}</button>
+                </div>
               </div>
               <div id="mediaStatus${i}" class="section-help">No files selected</div>
             `
@@ -3211,6 +3278,7 @@ async function uploadMedia(section) {
   }
 
   const loader = document.getElementById("uploadLoader");
+  captureUploadSelection(section);
   const files = getPendingUploadFiles(section);
 
   const { errors, warnings, validFiles, totalSize } = validateUploadFiles(files);
@@ -3323,7 +3391,7 @@ async function uploadMedia(section) {
 
     updateUploadProgress(
       0,
-      `Queueing ${uploadFiles.length} file(s), ${formatBytes(totalSize)} for ${deviceOrigins.length} device${deviceOrigins.length === 1 ? "" : "s"}`
+      `Preparing ${uploadFiles.length} file(s), ${formatBytes(totalSize)} for ${deviceOrigins.length} device${deviceOrigins.length === 1 ? "" : "s"}`
     );
 
     const duplicateOrigins = await detectDuplicateUploadTargets(targetDevices, section, uploadFiles);
@@ -3342,20 +3410,20 @@ async function uploadMedia(section) {
         tracker.setState(idx, "skipped", "Skipped: identical files already exist", 100);
         skippedDuplicateTargets.push(target);
       } else {
-        tracker.setState(idx, "pending", "Waiting in queue", 0);
+        tracker.setState(idx, "pending", "Ready for parallel upload", 0);
       }
     });
 
     const queuedTargets = allSelectedTargets
       .map((target, idx) => ({ ...target, index: idx }))
       .filter((target) => target.online !== false && !duplicateOrigins.has(target.origin));
+    const uploadConcurrency = Math.max(1, Math.min(MULTI_DEVICE_UPLOAD_CONCURRENCY, queuedTargets.length || 1));
 
-    for (let queueIndex = 0; queueIndex < queuedTargets.length; queueIndex += 1) {
-      const target = queuedTargets[queueIndex];
+    await runUploadsInParallel(queuedTargets, uploadConcurrency, async (target, queueIndex, laneIndex) => {
       tracker.setState(
         target.index,
         "uploading",
-        `Uploading now (${queueIndex + 1}/${queuedTargets.length})`,
+        `Uploading now in lane ${laneIndex + 1} (${queueIndex + 1}/${queuedTargets.length})`,
         0
       );
       try {
@@ -3382,19 +3450,19 @@ async function uploadMedia(section) {
         if (recovered) {
           successfulTargets.push(target);
           recoveredTargets.push(target);
-          continue;
+          return;
         }
         tracker.setState(target.index, "error", rawMessage, 0);
         failedTargets.push({ ...target, message: rawMessage });
       }
-    }
+    });
 
     if (successfulTargets.length) {
       await loadPreviewMediaSection(primaryOrigin, section);
       renderScreenPreview();
     }
 
-    tracker.finish(`Upload queue finished. ${successfulTargets.length}/${queuedTargets.length} devices updated.`);
+    tracker.finish(`Upload finished. ${successfulTargets.length}/${queuedTargets.length} devices updated.`);
     const summaryParts = [
       successfulTargets.length
         ? `${successfulTargets.length} device${successfulTargets.length === 1 ? "" : "s"} updated with new media.`
@@ -3543,6 +3611,8 @@ async function saveConfig() {
       throw new Error(String(failed.reason?.message || "Unable to save configuration."));
     }
 
+    updateUploadProgress(92, "Applying settings instantly on selected TVs...");
+    await clearUnusedSectionsForLayout(targetDevices, config.layout || "fullscreen");
     updateUploadProgress(100, "Configuration applied successfully.");
     showNotice("success", "Settings Saved", "Configuration has been applied successfully.", 2200);
     if (window.ReactNativeWebView) {
@@ -3786,6 +3856,7 @@ window.__cmsReloadAccessOverrides = loadAccessOverrides;
   document.getElementById("deviceSelect").addEventListener("change", async () => {
     const value = document.getElementById("deviceSelect")?.value || "all";
     selectedDeviceOrigins = value === "all" ? new Set(Array.from(currentDeviceMap.keys())) : new Set([value]);
+    await clearEnterpriseGroupSelectionSilently();
     await handleDeviceSelectionChanged();
     loadDeviceAlerts();
   });

@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const multer = require("multer");
-const { getPlaybackTimeline } = require("../services/playbackTimeline");
+const { getPlaybackTimeline, updateSectionTimeline } = require("../services/playbackTimeline");
 
 const router = express.Router();
 
@@ -16,6 +16,7 @@ const assetBasePath = process.pkg
 const CONFIG_DIR = path.join(basePath, "data", "configs");
 const FALLBACK_DIR = path.join(basePath, "uploads", "fallbacks");
 const UPDATE_DIR = path.join(basePath, "uploads", "updates");
+const UPLOADS_DIR = path.join(basePath, "uploads");
 const DEFAULT_CONFIG_PATH = path.join(CONFIG_DIR, "default.json");
 const ASSET_DEFAULT_CONFIG_PATH = path.join(assetBasePath, "data", "configs", "default.json");
 const SAFE_DEVICE_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -122,6 +123,34 @@ function ensureDefaultConfig() {
 }
 
 ensureDefaultConfig();
+
+function sectionStoragePaths(deviceId, section) {
+  const sectionBase = path.join(UPLOADS_DIR, deviceId, `section${section}`);
+  return {
+    sectionBase,
+    versionsDir: `${sectionBase}__versions`,
+    activeFile: `${sectionBase}__active.txt`,
+  };
+}
+
+function clearSectionMediaFiles(deviceId, section) {
+  const safeSection = Math.max(1, Math.min(3, Number(section || 1)));
+  const { sectionBase, versionsDir, activeFile } = sectionStoragePaths(deviceId, safeSection);
+  [sectionBase, versionsDir, activeFile].forEach((targetPath) => {
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+    } catch (_e) {
+    }
+  });
+  return updateSectionTimeline(deviceId, safeSection, {
+    targetDevice: deviceId,
+    syncAt: Date.now(),
+    updatedAt: Date.now(),
+    cycleId: `${safeSection}-cleared-${Date.now()}`,
+    fileCount: 0,
+    mediaSignature: "",
+  });
+}
 
 const fallbackUpload = multer({
   storage: multer.diskStorage({
@@ -322,6 +351,32 @@ router.post("/rename-device", (req, res) => {
     delivered: result.delivered,
     skipped: result.skipped,
   });
+});
+
+router.post("/clear-section-media", (req, res) => {
+  const safeTarget = sanitizeDeviceId(req.body?.targetDevice);
+  const safeSection = Math.max(1, Math.min(3, Number(req.body?.section || 1)));
+  if (!safeTarget) {
+    return res.status(400).json({ success: false, error: "invalid-device-id" });
+  }
+
+  const targets = safeTarget === "all"
+    ? ["all", ...Object.keys(global.connectedDevices || {})]
+    : [safeTarget];
+
+  targets.forEach((deviceId) => {
+    const timeline = clearSectionMediaFiles(deviceId, safeSection);
+    const payload = { section: safeSection, syncAt: Date.now(), timeline };
+    if (deviceId === "all") {
+      if (global.io) global.io.emit("media-updated", payload);
+      return;
+    }
+    if (global.io && global.connectedDevices?.[deviceId]) {
+      global.io.to(global.connectedDevices[deviceId]).emit("media-updated", payload);
+    }
+  });
+
+  return res.json({ success: true, section: safeSection, cleared: targets.length });
 });
 
 router.post("/clear-cache", (req, res) => {
