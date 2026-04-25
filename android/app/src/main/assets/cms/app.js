@@ -89,6 +89,28 @@ function updateViewportHeightVar() {
   }
 }
 
+function applyTvViewportClass() {
+  const body = document.body;
+  if (!body) return;
+  const width = Math.max(window.innerWidth || 0, 1);
+  const height = Math.max(window.innerHeight || 0, 1);
+  const shortest = Math.min(width, height);
+
+  body.classList.toggle("tv-screen-portrait", height >= width);
+  body.classList.toggle("tv-screen-landscape", width > height);
+  body.classList.remove("tv-size-sm", "tv-size-md", "tv-size-lg");
+
+  if (shortest <= 720) {
+    body.classList.add("tv-size-sm");
+    return;
+  }
+  if (shortest <= 1080) {
+    body.classList.add("tv-size-md");
+    return;
+  }
+  body.classList.add("tv-size-lg");
+}
+
 function applyPlayerOrientationClass() {
   const body = document.body;
   if (!body) return;
@@ -114,6 +136,44 @@ function getFocusableElementsForTv() {
   });
 }
 
+function getElementScrollTop(element) {
+  if (!element) return 0;
+  if (element === document.scrollingElement || element === document.documentElement || element === document.body) {
+    return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+  }
+  return element.scrollTop || 0;
+}
+
+function setElementScrollTop(element, value) {
+  if (!element) return;
+  if (element === document.scrollingElement || element === document.documentElement || element === document.body) {
+    window.scrollTo(0, value);
+    return;
+  }
+  element.scrollTop = value;
+}
+
+function canScrollPane(pane, direction) {
+  if (!pane) return false;
+  const scrollTop = getElementScrollTop(pane);
+  const clientHeight = pane === document.scrollingElement || pane === document.documentElement || pane === document.body
+    ? window.innerHeight || document.documentElement.clientHeight || 0
+    : pane.clientHeight || 0;
+  const scrollHeight = pane.scrollHeight || 0;
+  if (direction === "up") return scrollTop > 2;
+  return scrollTop + clientHeight < scrollHeight - 2;
+}
+
+function performTvScroll(pane, delta) {
+  if (!pane || !delta) return false;
+  const maxScroll = Math.max(0, (pane.scrollHeight || 0) - ((pane.clientHeight || window.innerHeight || 0)));
+  const before = getElementScrollTop(pane);
+  const next = Math.max(0, Math.min(maxScroll, before + delta));
+  if (Math.abs(next - before) < 1) return false;
+  setElementScrollTop(pane, next);
+  return true;
+}
+
 function focusNearestElementByDirection(direction) {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const focusables = getFocusableElementsForTv();
@@ -126,37 +186,112 @@ function focusNearestElementByDirection(direction) {
   const currentRect = active.getBoundingClientRect();
   const currentCenterX = currentRect.left + currentRect.width / 2;
   const currentCenterY = currentRect.top + currentRect.height / 2;
-  let best = null;
-  let bestScore = Number.POSITIVE_INFINITY;
+  const activePane = getTvScrollablePane(active);
 
-  focusables.forEach((el) => {
-    if (el === active) return;
-    const rect = el.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    const deltaX = centerX - currentCenterX;
-    const deltaY = centerY - currentCenterY;
+  const findBest = (items) => {
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
 
-    if (direction === "right" && deltaX <= 8) return;
-    if (direction === "left" && deltaX >= -8) return;
-    if (direction === "down" && deltaY <= 8) return;
-    if (direction === "up" && deltaY >= -8) return;
+    items.forEach((el) => {
+      if (el === active) return;
+      const rect = el.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const deltaX = centerX - currentCenterX;
+      const deltaY = centerY - currentCenterY;
 
-    const primary = direction === "left" || direction === "right" ? Math.abs(deltaX) : Math.abs(deltaY);
-    const secondary = direction === "left" || direction === "right" ? Math.abs(deltaY) : Math.abs(deltaX);
-    const score = primary + secondary * 2.4;
+      if (direction === "right" && deltaX <= 8) return;
+      if (direction === "left" && deltaX >= -8) return;
+      if (direction === "down" && deltaY <= 8) return;
+      if (direction === "up" && deltaY >= -8) return;
 
-    if (score < bestScore) {
-      bestScore = score;
-      best = el;
+      const primary = direction === "left" || direction === "right" ? Math.abs(deltaX) : Math.abs(deltaY);
+      const secondary = direction === "left" || direction === "right" ? Math.abs(deltaY) : Math.abs(deltaX);
+      const panePenalty =
+        activePane && (direction === "up" || direction === "down") && getTvScrollablePane(el) !== activePane
+          ? Math.max(160, Math.abs(deltaX) * 1.5)
+          : 0;
+      const score = primary + secondary * 2.4 + panePenalty;
+
+      if (score < bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    });
+
+    return best;
+  };
+
+  if ((direction === "up" || direction === "down") && activePane) {
+    const samePaneFocusables = focusables.filter((el) => getTvScrollablePane(el) === activePane);
+    const samePaneBest = findBest(samePaneFocusables);
+    if (samePaneBest instanceof HTMLElement) {
+      samePaneBest.focus();
+      return true;
     }
-  });
+    if (canScrollPane(activePane, direction)) {
+      return false;
+    }
+  }
+
+  const best = findBest(focusables);
 
   if (best instanceof HTMLElement) {
     best.focus();
     return true;
   }
   return false;
+}
+
+function getTvScrollablePane(element) {
+  let current = element instanceof HTMLElement ? element : null;
+  while (current && current !== document.body) {
+    const style = window.getComputedStyle(current);
+    const canScrollY = /(auto|scroll)/.test(`${style.overflowY} ${style.overflow}`);
+    if (canScrollY && current.scrollHeight > current.clientHeight + 4) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  const page = document.scrollingElement || document.documentElement;
+  return page && page.scrollHeight > page.clientHeight + 4 ? page : null;
+}
+
+function scrollTvPane(direction) {
+  if (!IS_TV_COMPACT_MODE) return false;
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const fallbackPane = document.querySelector(".middle-col") || document.querySelector(".left-col") || document.querySelector(".container");
+  const pane = getTvScrollablePane(active) || fallbackPane;
+  if (!pane) return false;
+
+  const amount = Math.max(72, Math.round((pane.clientHeight || window.innerHeight || 360) * 0.42));
+  const delta = direction === "up" ? -amount : amount;
+  return performTvScroll(pane, delta)
+    || canScrollPane(pane, direction);
+}
+
+function keepTvFocusVisible(target) {
+  if (!(target instanceof HTMLElement)) return;
+  window.requestAnimationFrame(() => {
+    try {
+      const pane = getTvScrollablePane(target);
+      if (pane && pane !== document.scrollingElement && pane !== document.documentElement) {
+        const paneRect = pane.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const margin = 28;
+        if (targetRect.bottom > paneRect.bottom - margin) {
+          performTvScroll(pane, targetRect.bottom - paneRect.bottom + margin);
+          return;
+        }
+        if (targetRect.top < paneRect.top + margin) {
+          performTvScroll(pane, targetRect.top - paneRect.top - margin);
+          return;
+        }
+      }
+      target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: IS_TV_COMPACT_MODE ? "auto" : "smooth" });
+    } catch (_e) {
+    }
+  });
 }
 
 function setLoaderVisibility(visible) {
@@ -2400,6 +2535,7 @@ function renderGrid3LayoutOptions() {
 }
 
 function renderScreenPreview() {
+  if (IS_TV_COMPACT_MODE) return;
   const config = currentConfig || buildConfigFromForm();
   const layout = config.layout || "fullscreen";
   const preview = document.getElementById("screenPreview");
@@ -2554,6 +2690,7 @@ async function loadPreviewMedia(deviceId) {
 }
 
 function startPreviewPolling() {
+  if (IS_TV_COMPACT_MODE) return;
   if (previewPollTimer) {
     clearInterval(previewPollTimer);
   }
@@ -2990,7 +3127,7 @@ function startAlertsPolling() {
     clearInterval(alertsPollTimer);
   }
   loadDeviceAlerts();
-  alertsPollTimer = setInterval(loadDeviceAlerts, 5000);
+  alertsPollTimer = setInterval(loadDeviceAlerts, IS_TV_COMPACT_MODE ? 15000 : 5000);
 }
 
 function onSectionSourceChange(section) {
@@ -3824,7 +3961,11 @@ window.__cmsReloadAccessOverrides = loadAccessOverrides;
 
   document.addEventListener("DOMContentLoaded", async () => {
   updateViewportHeightVar();
-  window.addEventListener("resize", updateViewportHeightVar);
+  applyTvViewportClass();
+  window.addEventListener("resize", () => {
+    updateViewportHeightVar();
+    applyTvViewportClass();
+  });
     if (IS_TV_COMPACT_MODE) {
       document.body.classList.add("tv-compact-mode");
     }
@@ -3935,22 +4076,17 @@ window.__cmsReloadAccessOverrides = loadAccessOverrides;
       return;
     }
     if (event.key === "ArrowDown") {
-      if (focusNearestElementByDirection("down")) event.preventDefault();
+      if (focusNearestElementByDirection("down") || scrollTvPane("down")) event.preventDefault();
       return;
     }
     if (event.key === "ArrowUp") {
-      if (focusNearestElementByDirection("up")) event.preventDefault();
+      if (focusNearestElementByDirection("up") || scrollTvPane("up")) event.preventDefault();
     }
   });
 
   document.addEventListener("focusin", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
-    window.requestAnimationFrame(() => {
-      try {
-        target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-      } catch (_e) {
-      }
-    });
+    keepTvFocusVisible(target);
   });
 });

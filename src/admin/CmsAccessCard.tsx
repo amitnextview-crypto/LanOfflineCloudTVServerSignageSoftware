@@ -5,6 +5,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import {
@@ -24,6 +25,9 @@ export default function CmsAccessCard({
   onOpenCms,
   preferredFocusTarget = "openCms",
 }: Props) {
+  const { width, height } = useWindowDimensions();
+  const isCompactScreen = Math.min(width, height) < 720;
+  const isPortraitScreen = height >= width;
   const [info, setInfo] = useState<CmsAccessInfo>(getCmsAccessInfo());
   const [nameInput, setNameInput] = useState(info.deviceName || "");
   const [openFocused, setOpenFocused] = useState(false);
@@ -50,12 +54,39 @@ export default function CmsAccessCard({
   };
 
   return (
-    <View style={[styles.card, compact ? styles.cardCompact : null]}>
-      <View style={styles.qrWrap}>
+    <View
+      style={[
+        styles.card,
+        compact ? styles.cardCompact : null,
+        isPortraitScreen ? styles.cardPortrait : null,
+        isCompactScreen ? styles.cardSmall : null,
+      ]}
+    >
+      <View
+        style={[
+          styles.qrWrap,
+          isPortraitScreen ? styles.qrWrapPortrait : null,
+          isCompactScreen ? styles.qrWrapSmall : null,
+        ]}
+      >
         {info.qrDataUri ? (
-          <Image source={{ uri: info.qrDataUri }} style={styles.qrImage} />
+          <Image
+            source={{ uri: info.qrDataUri }}
+            style={[
+              styles.qrImage,
+              isPortraitScreen ? styles.qrImagePortrait : null,
+              isCompactScreen ? styles.qrImageSmall : null,
+            ]}
+          />
         ) : (
-          <View style={[styles.qrImage, styles.qrPlaceholder]}>
+          <View
+            style={[
+              styles.qrImage,
+              styles.qrPlaceholder,
+              isPortraitScreen ? styles.qrImagePortrait : null,
+              isCompactScreen ? styles.qrImageSmall : null,
+            ]}
+          >
             <Text style={styles.qrPlaceholderText}>QR</Text>
           </View>
         )}
@@ -79,7 +110,7 @@ export default function CmsAccessCard({
         )}
       </View>
 
-      <View style={styles.metaWrap}>
+      <View style={[styles.metaWrap, isPortraitScreen ? styles.metaWrapPortrait : null]}>
         <Text style={styles.sectionLabel}>TV Name</Text>
         <View style={styles.nameRow}>
           <TextInput
@@ -135,16 +166,40 @@ const styles = StyleSheet.create({
   cardCompact: {
     marginTop: 0,
   },
+  cardPortrait: {
+    flexDirection: "column",
+  },
+  cardSmall: {
+    padding: 12,
+    borderRadius: 14,
+  },
   qrWrap: {
     width: 154,
     alignItems: "center",
     marginRight: 16,
+  },
+  qrWrapPortrait: {
+    width: "100%",
+    marginRight: 0,
+    marginBottom: 14,
+  },
+  qrWrapSmall: {
+    marginBottom: 12,
   },
   qrImage: {
     width: 138,
     height: 138,
     borderRadius: 12,
     backgroundColor: "#ffffff",
+  },
+  qrImagePortrait: {
+    width: 150,
+    height: 150,
+  },
+  qrImageSmall: {
+    width: 120,
+    height: 120,
+    borderRadius: 10,
   },
   qrPlaceholder: {
     alignItems: "center",
@@ -192,6 +247,9 @@ const styles = StyleSheet.create({
   },
   metaWrap: {
     flex: 1,
+  },
+  metaWrapPortrait: {
+    width: "100%",
   },
   sectionLabel: {
     color: "#a8cde8",

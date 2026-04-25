@@ -4,6 +4,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
@@ -30,6 +31,9 @@ export default function AdminCmsPanel({
   onViewChange,
   orientation = "horizontal",
 }: Props) {
+  const { width, height } = useWindowDimensions();
+  const isPortraitScreen = height >= width;
+  const isCompactScreen = Math.min(width, height) < 720;
   const slide = useRef(new Animated.Value(400)).current;
   const webRef = useRef<WebView>(null);
   const [cmsUrl, setCmsUrl] = useState("http://127.0.0.1:8080");
@@ -112,10 +116,12 @@ export default function AdminCmsPanel({
     <Animated.View style={[styles.overlay, { transform: [{ translateX: slide }] }]}>
       {view === "cms" ? (
         <View style={styles.fullscreenWrap}>
-          <View style={styles.header}>
+          <View style={[styles.header, isCompactScreen ? styles.headerCompact : null]}>
             <View style={styles.headerCopy}>
-              <Text style={styles.title}>CMS</Text>
-              <Text style={styles.subtitle}>TV CMS mirrors browser features and uses the native TV picker for uploads.</Text>
+              <Text style={[styles.title, isCompactScreen ? styles.titleCompact : null]}>CMS</Text>
+              <Text style={[styles.subtitle, isCompactScreen ? styles.subtitleCompact : null]}>
+                TV CMS mirrors browser features and uses the native TV picker for uploads.
+              </Text>
             </View>
             <TouchableOpacity
               onPress={onClose}
@@ -124,6 +130,7 @@ export default function AdminCmsPanel({
               activeOpacity={0.8}
               style={[
                 styles.iconBtn,
+                isCompactScreen ? styles.iconBtnCompact : null,
                 backFocused ? styles.iconBtnActive : null,
               ]}
               focusable
@@ -133,7 +140,13 @@ export default function AdminCmsPanel({
               <Text style={styles.iconBtnText}>Back</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.webWrapFullscreen}>
+          <View
+            style={[
+              styles.webWrapFullscreen,
+              isPortraitScreen ? styles.webWrapPortrait : styles.webWrapLandscape,
+              isCompactScreen ? styles.webWrapCompact : null,
+            ]}
+          >
             <WebView
               ref={webRef}
               source={{ uri: nativeTvCmsUrl }}
@@ -148,6 +161,7 @@ export default function AdminCmsPanel({
               setSupportMultipleWindows={false}
               hideKeyboardAccessoryView
               overScrollMode="never"
+              nestedScrollEnabled
               bounces={false}
               showsVerticalScrollIndicator={false}
               showsHorizontalScrollIndicator={false}
@@ -172,7 +186,7 @@ export default function AdminCmsPanel({
                 let parsed: any = null;
                 try {
                   parsed = raw.startsWith("{") ? JSON.parse(raw) : null;
-                } catch (_e) {
+                } catch {
                   parsed = null;
                 }
                 const match = raw.match(/^TV_UPLOAD_SECTION:(\d+)$/);
@@ -199,10 +213,12 @@ export default function AdminCmsPanel({
         </View>
       ) : (
         <>
-          <View style={styles.header}>
+          <View style={[styles.header, isCompactScreen ? styles.headerCompact : null]}>
             <View style={styles.headerCopy}>
-              <Text style={styles.title}>QR Access</Text>
-              <Text style={styles.subtitle}>Use remote arrows to move focus. Press OK to open CMS.</Text>
+              <Text style={[styles.title, isCompactScreen ? styles.titleCompact : null]}>QR Access</Text>
+              <Text style={[styles.subtitle, isCompactScreen ? styles.subtitleCompact : null]}>
+                Use remote arrows to move focus. Press OK to open CMS.
+              </Text>
             </View>
             <TouchableOpacity
               onPress={onClose}
@@ -211,6 +227,7 @@ export default function AdminCmsPanel({
               activeOpacity={0.8}
               style={[
                 styles.iconBtn,
+                isCompactScreen ? styles.iconBtnCompact : null,
                 backFocused ? styles.iconBtnActive : null,
               ]}
               focusable={false}
@@ -220,7 +237,7 @@ export default function AdminCmsPanel({
             </TouchableOpacity>
           </View>
 
-          <View style={styles.content}>
+          <View style={[styles.content, isCompactScreen ? styles.contentCompact : null]}>
             <CmsAccessCard
               compact
               onOpenCms={() => onViewChange("cms")}
@@ -252,6 +269,12 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     gap: 10,
   },
+  headerCompact: {
+    minHeight: 60,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 8,
+  },
   headerCopy: {
     flex: 1,
     minWidth: 0,
@@ -261,14 +284,23 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
   },
+  titleCompact: {
+    fontSize: 16,
+  },
   subtitle: {
     marginTop: 2,
     color: "rgba(212,225,238,0.7)",
     fontSize: 11,
   },
+  subtitleCompact: {
+    fontSize: 10,
+  },
   content: {
     flex: 1,
     padding: 12,
+  },
+  contentCompact: {
+    padding: 8,
   },
   fullscreenWrap: {
     flex: 1,
@@ -289,6 +321,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(120, 190, 231, 0.2)",
   },
+  webWrapLandscape: {
+    marginHorizontal: 12,
+  },
+  webWrapPortrait: {
+    marginHorizontal: 8,
+    marginVertical: 8,
+  },
+  webWrapCompact: {
+    margin: 8,
+    borderRadius: 12,
+  },
   webview: {
     flex: 1,
     backgroundColor: "#0f141c",
@@ -304,6 +347,13 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderWidth: 1,
     borderColor: "rgba(29, 143, 255, 0.4)",
+  },
+  iconBtnCompact: {
+    minWidth: 48,
+    minHeight: 40,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
   },
   iconBtnActive: {
     backgroundColor: "#43a6ff",

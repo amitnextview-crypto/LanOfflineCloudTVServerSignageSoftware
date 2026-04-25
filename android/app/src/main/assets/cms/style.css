@@ -5,6 +5,11 @@
 :root {
   --tvvh: 100vh;
   --tvvw: 100vw;
+  --tv-shell-pad: 10px;
+  --tv-card-pad: 11px;
+  --tv-grid-gap: 10px;
+  --tv-hero-gap: 10px;
+  --tv-card-radius: 16px;
   --bg-1: #071018;
   --bg-2: #0d1c2a;
   --card: rgba(15, 25, 36, 0.86);
@@ -48,7 +53,7 @@ body.cms-auth-locked {
 .container {
   max-width: 100vw;
   margin: 0 auto;
-  padding: 10px 10px 12px;
+  padding: var(--tv-shell-pad) var(--tv-shell-pad) 12px;
   position: relative;
   z-index: 1;
   min-height: var(--tvvh);
@@ -57,8 +62,8 @@ body.cms-auth-locked {
 .card {
   background: var(--card);
   border: 1px solid var(--card-border);
-  border-radius: var(--radius);
-  padding: 11px;
+  border-radius: var(--tv-card-radius);
+  padding: var(--tv-card-pad);
   margin-bottom: 10px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.26);
   animation: cardIn 260ms ease-out;
@@ -72,7 +77,7 @@ body.cms-auth-locked {
 .hero {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--tv-hero-gap);
   align-items: center;
 }
 
@@ -1043,7 +1048,7 @@ input[type="range"] {
 .main-grid {
   display: grid;
   grid-template-columns: minmax(220px, 0.88fr) minmax(420px, 1.22fr) minmax(280px, 0.9fr);
-  gap: 14px;
+  gap: max(12px, var(--tv-grid-gap));
   align-items: stretch;
   height: calc(var(--tvvh) - 88px);
   min-height: 0;
@@ -1398,6 +1403,51 @@ body.tv-compact-mode .main-grid {
   grid-template-columns: minmax(220px, 0.9fr) minmax(420px, 1.1fr);
 }
 
+body.tv-compact-mode.tv-size-sm {
+  --tv-shell-pad: 7px;
+  --tv-card-pad: 9px;
+  --tv-grid-gap: 8px;
+  --tv-hero-gap: 8px;
+  --tv-card-radius: 12px;
+}
+
+body.tv-compact-mode.tv-size-sm .hero h1 {
+  font-size: 22px;
+}
+
+body.tv-compact-mode.tv-size-sm .hero-logo {
+  width: 46px;
+  height: 46px;
+}
+
+body.tv-compact-mode.tv-size-sm .hero-sub,
+body.tv-compact-mode.tv-size-sm .section-help,
+body.tv-compact-mode.tv-size-sm .meta-note,
+body.tv-compact-mode.tv-size-sm .device-select-meta,
+body.tv-compact-mode.tv-size-sm .upload-detail-meta {
+  font-size: 11px;
+}
+
+body.tv-compact-mode.tv-size-sm .compact-btn,
+body.tv-compact-mode.tv-size-sm button,
+body.tv-compact-mode.tv-size-sm input,
+body.tv-compact-mode.tv-size-sm select,
+body.tv-compact-mode.tv-size-sm textarea {
+  font-size: 12px;
+}
+
+body.tv-compact-mode.tv-size-md {
+  --tv-shell-pad: 9px;
+  --tv-card-pad: 10px;
+  --tv-grid-gap: 9px;
+  --tv-hero-gap: 9px;
+  --tv-card-radius: 14px;
+}
+
+body.tv-compact-mode.tv-screen-landscape .main-grid {
+  grid-template-columns: minmax(200px, 0.86fr) minmax(0, 1.14fr);
+}
+
 body.tv-compact-mode.player-orientation-vertical .main-grid,
 body.tv-compact-mode.player-orientation-reverse-vertical .main-grid {
   grid-template-columns: 1fr;
@@ -1433,6 +1483,13 @@ body.tv-compact-mode .source-controls {
   grid-template-columns: 92px 1fr;
 }
 
+body.tv-compact-mode .card,
+body.tv-compact-mode .sub-card,
+body.tv-compact-mode .settings-card,
+body.tv-compact-mode .compact-card {
+  animation: none;
+}
+
 @media (orientation: portrait) {
   body.tv-compact-mode .main-grid {
     grid-template-columns: 1fr;
@@ -1451,6 +1508,20 @@ body.tv-compact-mode .source-controls {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+body.tv-compact-mode.tv-screen-portrait .main-grid,
+body.tv-compact-mode.player-orientation-vertical .main-grid,
+body.tv-compact-mode.player-orientation-reverse-vertical .main-grid {
+  grid-template-columns: 1fr;
+  height: auto;
+}
+
+body.tv-compact-mode.tv-screen-portrait .left-col,
+body.tv-compact-mode.tv-screen-portrait .middle-col,
+body.tv-compact-mode.tv-screen-portrait .right-col {
+  height: auto;
+  overflow-y: visible;
 }
 
 .message-overlay {

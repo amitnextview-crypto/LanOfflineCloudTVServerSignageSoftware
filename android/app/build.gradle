@@ -72,6 +72,14 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+tasks.register("syncCmsLogoFromServerPublic", Copy) {
+    def logoSource = file("../../server/public/nvlogo.png")
+    def cmsAssetsDir = file("src/main/assets/cms")
+    onlyIf { logoSource.exists() }
+    from(logoSource)
+    into(cmsAssetsDir)
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -104,6 +112,8 @@ buildTypes {
 }
 
 }
+
+preBuild.dependsOn("syncCmsLogoFromServerPublic")
 
 android.applicationVariants.all { variant ->
     if (variant.buildType.name == "release") {
