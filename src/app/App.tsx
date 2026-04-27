@@ -47,6 +47,10 @@ import { PlaybackController } from "../services/playbackController";
 import { findCMS, getServer, restoreServerFromStorage } from "../services/serverService";
 import { SourceManager, type SourceSnapshot } from "../services/sourceManager";
 import {
+  getUsbStateForPlayback,
+  warmUsbPlaybackCache,
+} from "../services/usbPlaybackCacheService";
+import {
   isUsbModuleAvailable,
   refreshUsbState,
   subscribeUsbState,
@@ -353,22 +357,30 @@ export default function App() {
     if (!isUsbModuleAvailable()) return;
 
     let mounted = true;
-    const applyUsbState = async () => {
+    const applyUsbState = async (incomingState?: any) => {
       try {
         const permissionGranted = await ensureUsbMediaReadPermissions();
         console.log("[USB_PERM]", permissionGranted ? "granted" : "denied");
         if (!permissionGranted) return;
-        const state = await refreshUsbState();
-        console.log("[USB_REFRESH]", JSON.stringify(state));
+        const state = incomingState || (await refreshUsbState());
+        const playbackState = await getUsbStateForPlayback(state);
+        console.log("[USB_REFRESH]", JSON.stringify(playbackState));
         if (!mounted) return;
-        sourceManagerRef.current.onUsbState(state);
+        sourceManagerRef.current.onUsbState(playbackState);
+        void warmUsbPlaybackCache(state).then((cachedState) => {
+          if (!mounted || !cachedState) return;
+          void getUsbStateForPlayback(cachedState).then((nextState) => {
+            if (!mounted) return;
+            sourceManagerRef.current.onUsbState(nextState);
+          });
+        });
       } catch {
         // ignore USB refresh errors
       }
     };
 
     const unsubscribeUsb = subscribeUsbState((state) => {
-      sourceManagerRef.current.onUsbState(state);
+      void applyUsbState(state);
     });
 
     const appStateSub = AppState.addEventListener("change", (nextState) => {
@@ -2087,6 +2099,9 @@ export default function App() {
     );
   }
 
+  const hideAdminButtons =
+    sourceSnapshot.usbMounted;
+
   if (!ready) {
     const ringSpin = spinValue.interpolate({
       inputRange: [0, 1],
@@ -2105,13 +2120,15 @@ export default function App() {
       <View style={styles.connectRoot}>
         <View style={styles.bgGlowTop} />
         <View style={styles.bgGlowBottom} />
-        <AdminButton
-          side="right"
-          icon={"\u25A6"}
-          hasTVPreferredFocus={!showAdmin}
-          onOpen={() => openAdminPanel("cms")}
-        />
-        {sourceSnapshot.activeSource !== "USB" ? (
+        {!hideAdminButtons ? (
+          <AdminButton
+            side="right"
+            icon={"\u25A6"}
+            hasTVPreferredFocus={!showAdmin}
+            onOpen={() => openAdminPanel("cms")}
+          />
+        ) : null}
+        {!hideAdminButtons ? (
           <AdminButton
             side="left"
             icon={"\u2699"}
@@ -2295,13 +2312,15 @@ export default function App() {
             onPlaybackError={handlePlaybackError}
           />
         </PlayerErrorBoundary>
-        <AdminButton
-          side="right"
-          icon={"\u25A6"}
-          hasTVPreferredFocus={!showAdmin}
-          onOpen={() => openAdminPanel("cms")}
-        />
-        {sourceSnapshot.activeSource !== "USB" ? (
+        {!hideAdminButtons ? (
+          <AdminButton
+            side="right"
+            icon={"\u25A6"}
+            hasTVPreferredFocus={!showAdmin}
+            onOpen={() => openAdminPanel("cms")}
+          />
+        ) : null}
+        {!hideAdminButtons ? (
           <AdminButton
             side="left"
             icon={"\u2699"}

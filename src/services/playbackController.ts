@@ -20,6 +20,7 @@ export class PlaybackController {
     const sourceSection = baseConfig?.sections?.[0] || {};
     return {
       ...baseConfig,
+      orientation: baseConfig?.orientation || "horizontal",
       layout: "fullscreen",
       bgColor: baseConfig?.bgColor || "#000000",
       ticker: {
@@ -31,7 +32,7 @@ export class PlaybackController {
           ...sourceSection,
           sourceType: "multimedia",
           sourceUrl: "",
-          usbFitMode: "contain",
+          usbFitMode: "cover",
           slideDuration: Number(sourceSection?.slideDuration || baseConfig?.slideDuration || 5),
         },
       ],

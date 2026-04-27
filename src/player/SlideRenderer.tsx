@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Animated, Dimensions, Easing, Image, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Animated, Dimensions, Easing, StyleSheet, Text, View } from "react-native";
 import { ViewType } from "react-native-video";
 import { WebView } from "react-native-webview";
 import RNFS from "react-native-fs";
@@ -14,206 +14,33 @@ import {
 } from "../services/mediaService";
 import { getServer } from "../services/serverService";
 import { buildPlaybackResumeKey, getPlaylistAdvanceState } from "./videoPlaybackState";
-import NativeVideoPlayer from "./NativeVideoPlayer";
+import SlideRendererBackdrop from "./SlideRendererBackdrop";
+import SlideRendererMediaStage from "./SlideRendererMediaStage";
+import {
+  SOURCE_TYPES,
+  areMediaListsEqual,
+  buildListSignature,
+  buildPdfViewerUrl,
+  buildRemoteMediaUri,
+  findMatchingIndex,
+  getMediaContentIdentity,
+  getMediaIdentity,
+  getMediaStableIdentity,
+  isLocalPlayableUri,
+  isUsbSourceItem,
+  isVideoFile,
+  normalizeMediaUri,
+  normalizeWebUrl,
+  normalizeYoutubeEmbedUrl,
+  shouldPreferStreamingForVideo,
+} from "./slideRendererUtils";
 
-const SOURCE_TYPES = {
-  multimedia: "multimedia",
-  web: "web",
-  youtube: "youtube",
-};
-const VIDEO_FILE_RE = /\.(mp4|m4v|mov|mkv|webm)(\?.*)?$/i;
 const LARGE_VIDEO_STREAM_THRESHOLD_BYTES = 300 * 1024 * 1024;
 const HOLD_LARGE_VIDEO_UNTIL_CACHED = false;
 const VIDEO_PROGRESS_SAVE_INTERVAL_MS = 1000;
 
-function normalizeWebUrl(url: string) {
-  const value = String(url || "").trim();
-  if (!value) return "";
-  if (/^https?:\/\//i.test(value)) return value;
-  return `https://${value}`;
-}
-
-function extractYoutubeId(url: string) {
-  const value = String(url || "").trim();
-  const patterns = [
-    /youtu\.be\/([a-zA-Z0-9_-]{6,})/i,
-    /youtube\.com\/watch\?v=([a-zA-Z0-9_-]{6,})/i,
-    /youtube\.com\/shorts\/([a-zA-Z0-9_-]{6,})/i,
-    /youtube\.com\/embed\/([a-zA-Z0-9_-]{6,})/i,
-    /youtube\.com\/live\/([a-zA-Z0-9_-]{6,})/i,
-  ];
-  for (const pattern of patterns) {
-    const match = value.match(pattern);
-    if (match?.[1]) return match[1];
-  }
-  return "";
-}
-
-function normalizeYoutubeEmbedUrl(url: string) {
-  const value = String(url || "").trim();
-  if (!value) return "";
-  const id = extractYoutubeId(value);
-  if (!id) return "";
-  // On some Android WebView builds, embedded YouTube can throw Error 153.
-  // Using watch URL is more reliable there while still allowing autoplay muted playback.
-  return `https://www.youtube.com/watch?v=${id}&autoplay=1&mute=1&playsinline=1`;
-}
-
-function buildPdfViewerUrl(fileUrl: string, page: number, nonce?: string | number) {
-  const safePage = Math.max(1, Number(page || 1));
-  if (/^file:\/\//i.test(String(fileUrl || ""))) {
-    return String(fileUrl || "");
-  }
-  const match = String(fileUrl || "").match(/^(https?:\/\/[^/]+)/i);
-  const origin = match?.[1] || "";
-  const stamp = nonce ? `&r=${encodeURIComponent(String(nonce))}` : "";
-  if (origin) {
-    return `${origin}/pdf-viewer.html?file=${encodeURIComponent(fileUrl)}&page=${safePage}${stamp}`;
-  }
-  return `/pdf-viewer.html?file=${encodeURIComponent(fileUrl)}&page=${safePage}${stamp}`;
-}
-
-function normalizeMediaUri(value: string) {
-  const uri = String(value || "").trim();
-  if (!uri) return "";
-  if (/^https?:\/\//i.test(uri)) {
-    try {
-      return encodeURI(uri);
-    } catch {
-      return uri;
-    }
-  }
-  return uri;
-}
-
-function isLocalPlayableUri(value: string) {
-  return /^(file|content):\/\//i.test(String(value || "").trim());
-}
-
-function isUsbSourceItem(item: any) {
-  return (
-    String(item?.sourceId || "").toLowerCase() === "usb" ||
-    /^usb:\/\//i.test(String(item?.url || ""))
-  );
-}
-
-function buildRemoteMediaUri(server: string, pathValue: string, versionHint?: string | number) {
-  const base = normalizeMediaUri(`${String(server || "").trim()}${String(pathValue || "").trim()}`);
-  if (!base) return "";
-  const stamp = String(versionHint || "").trim();
-  if (!stamp) return base;
-  return `${base}${base.includes("?") ? "&" : "?"}v=${encodeURIComponent(stamp)}`;
-}
-
-function isVideoFile(item: any) {
-  const mime = String(item?.type || "").toLowerCase();
-  if (mime.startsWith("video/")) return true;
-  const value = String(
-    item?.originalName || item?.name || item?.url || item?.remoteUrl || ""
-  );
-  return VIDEO_FILE_RE.test(value);
-}
-
-function getMediaIdentity(item: any) {
-  return [
-    String(item?.url || ""),
-    String(item?.originalName || item?.name || ""),
-    String(item?.type || ""),
-    String(item?.remoteUrl || ""),
-    Number(item?.mtimeMs || 0),
-    Number(item?.size || 0),
-    Number(item?.page || 0),
-  ].join("|");
-}
-
-function getMediaContentIdentity(item: any) {
-  return [
-    String(item?.url || ""),
-    String(item?.originalName || item?.name || ""),
-    String(item?.type || ""),
-    Number(item?.mtimeMs || 0),
-    Number(item?.size || 0),
-    Number(item?.page || 0),
-  ].join("|");
-}
-
-function getMediaStableIdentity(item: any) {
-  return [
-    String(item?.url || ""),
-    String(item?.originalName || item?.name || ""),
-    String(item?.type || ""),
-    Number(item?.page || 0),
-  ].join("|");
-}
-
-function getMediaCacheIdentity(item: any) {
-  return [
-    String(item?.localPath || ""),
-    String(item?.remoteUrl || ""),
-  ].join("|");
-}
-
-function shouldPreferStreamingForVideo(item: any, server: string) {
-  return !!server && isVideoFile(item);
-}
-
 function isCacheEligible(item: any) {
   return !!item && isMediaCacheEligible(item);
-}
-
-function buildListSignature(list: any[]) {
-  if (!Array.isArray(list) || !list.length) return "empty";
-  let hash = 0;
-  const parts: string[] = [];
-  for (const item of list) {
-    const part = getMediaStableIdentity(item);
-    parts.push(part);
-    for (let i = 0; i < part.length; i += 1) {
-      hash = (hash * 33 + part.charCodeAt(i)) | 0;
-    }
-  }
-  return `${list.length}|${Math.abs(hash).toString(36)}|${parts.join("||")}`;
-}
-
-function areMediaListsEqual(a: any[], b: any[]) {
-  if (a === b) return true;
-  if (!Array.isArray(a) || !Array.isArray(b)) return false;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) {
-    if (getMediaStableIdentity(a[i]) !== getMediaStableIdentity(b[i])) {
-      return false;
-    }
-    if (getMediaCacheIdentity(a[i]) !== getMediaCacheIdentity(b[i])) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function findMatchingIndex(list: any[], current: any, fallbackIndex = 0) {
-  if (!Array.isArray(list) || !list.length) return 0;
-  if (!current) return Math.min(fallbackIndex, list.length - 1);
-  const currentIdentity = getMediaStableIdentity(current);
-  const safeFallback = Math.min(Math.max(0, fallbackIndex), list.length - 1);
-  if (getMediaStableIdentity(list[safeFallback]) === currentIdentity) {
-    return safeFallback;
-  }
-  const matchedIndexes = list
-    .map((item, idx) => (getMediaStableIdentity(item) === currentIdentity ? idx : -1))
-    .filter((idx) => idx >= 0);
-  if (matchedIndexes.length) {
-    let closest = matchedIndexes[0];
-    let bestDelta = Math.abs(matchedIndexes[0] - safeFallback);
-    for (const idx of matchedIndexes) {
-      const delta = Math.abs(idx - safeFallback);
-      if (delta < bestDelta) {
-        bestDelta = delta;
-        closest = idx;
-      }
-    }
-    return closest;
-  }
-  return Math.min(fallbackIndex, list.length - 1);
 }
 
 export default function SlideRenderer({
@@ -462,7 +289,7 @@ export default function SlideRenderer({
   const sectionConfig = config?.sections?.[sectionIndex] || {};
   const sourceType = sectionConfig?.sourceType || SOURCE_TYPES.multimedia;
   const sourceUrl = sectionConfig?.sourceUrl || "";
-  const mediaResizeMode = sectionConfig?.usbFitMode || "stretch";
+  const sectionResizeMode = sectionConfig?.usbFitMode || "stretch";
   const isMultiPaneLayout = config?.layout === "grid2" || config?.layout === "grid3";
   const mediaRotateLayerStyle = styles.fillLayer;
 
@@ -1651,6 +1478,8 @@ export default function SlideRenderer({
     !!uri;
   const currentFileSize = Number(currentFile?.size || 0);
   const currentIsVideo = isVideoFile(currentFile);
+  const mediaResizeMode =
+    isUsbSourceItem(currentFile) && !currentIsVideo ? "stretch" : sectionResizeMode;
   const currentLocalPlayableUri = normalizeMediaUri(String(currentFile?.remoteUrl || ""));
   const currentHasLocalPlayableUri = isLocalPlayableUri(currentLocalPlayableUri);
   const emergencyVideoUri =
@@ -1725,95 +1554,6 @@ export default function SlideRenderer({
     }
     lastRenderSnapshotRef.current = nextSnapshot;
   }, [sourceType, currentFile, uri, textContent, transitionAnimationType, slideTransitionDuration, sectionHasVideo]);
-
-  const renderTransitionBackdrop = () => {
-    if (!transitionBackdrop) return null;
-    const backFile = transitionBackdrop.file;
-    if (!backFile || !transitionBackdrop.uri) return null;
-    const backType = String(backFile?.type || "").toLowerCase();
-    const backIsText =
-      backType === "text" || /\.txt$/i.test(backFile?.originalName || backFile?.name || "");
-    const backIsPdf =
-      backType === "pdf" || /\.pdf$/i.test(backFile?.originalName || backFile?.name || "");
-    if (!backIsText && !backIsPdf && transitionAnimationType === "slide") {
-      return null;
-    }
-    const animatedBackdropStyle =
-      transitionAnimationType === "slide" && !sectionHasVideo
-        ? [
-            styles.fillLayer,
-            styles.transitionBackdrop,
-            {
-              transform: [
-                {
-                  translateX:
-                    transitionDirection === "left"
-                      ? backdropTranslateX
-                      : transitionDirection === "right"
-                      ? backdropTranslateX
-                      : 0,
-                },
-                {
-                  translateY:
-                    transitionDirection === "top"
-                      ? backdropTranslateY
-                      : transitionDirection === "bottom"
-                      ? backdropTranslateY
-                      : 0,
-                },
-              ],
-            },
-          ]
-        : [styles.fillLayer, styles.transitionBackdrop];
-
-    if (backIsText) {
-      return (
-        <Animated.View pointerEvents="none" style={animatedBackdropStyle}>
-          <ScrollView
-            style={styles.media}
-            contentContainerStyle={styles.textContentWrap}
-            showsVerticalScrollIndicator={false}
-          >
-            <Text style={styles.textContent}>
-              {String(transitionBackdrop.textContent || "")}
-            </Text>
-          </ScrollView>
-        </Animated.View>
-      );
-    }
-
-    if (backIsPdf) {
-      return (
-        <Animated.View pointerEvents="none" style={animatedBackdropStyle}>
-          <WebView
-            source={{
-              uri: buildPdfViewerUrl(
-                transitionBackdrop.uri,
-                Number(backFile?.page || 1),
-                "transition"
-              ),
-            }}
-            style={styles.media}
-            javaScriptEnabled
-            domStorageEnabled
-            scrollEnabled={false}
-            mixedContentMode="always"
-          />
-        </Animated.View>
-      );
-    }
-
-    return (
-      <Animated.View pointerEvents="none" style={animatedBackdropStyle}>
-        <Image
-          source={{ uri: transitionBackdrop.uri }}
-          style={styles.media}
-          resizeMode="stretch"
-          fadeDuration={0}
-        />
-      </Animated.View>
-    );
-  };
 
   useEffect(() => {
     let cancelled = false;
@@ -2256,7 +1996,16 @@ export default function SlideRenderer({
         );
       }}
     >
-      {renderTransitionBackdrop()}
+      <SlideRendererBackdrop
+        transitionBackdrop={transitionBackdrop}
+        transitionAnimationType={transitionAnimationType}
+        sectionHasVideo={sectionHasVideo}
+        transitionDirection={transitionDirection}
+        backdropTranslateX={backdropTranslateX}
+        backdropTranslateY={backdropTranslateY}
+        slideTransitionDuration={slideTransitionDuration}
+        styles={styles}
+      />
       <Animated.View
         style={[
           styles.fillLayer,
@@ -2312,37 +2061,44 @@ export default function SlideRenderer({
             </View>
           </View>
         ) : null}
-        {showProcessingOverlay ? (
-        <View style={styles.processingWrap}>
-          <ActivityIndicator size="large" color="#7fffd4" />
-          <Text style={styles.processingTitle}>Updating Section</Text>
-          <Text style={styles.processingText}>
-            {String(processingMessage || "Uploading... Please wait.")}
-          </Text>
-          {uploadTotal > 0 ? (
-            <Text style={styles.processingCountText}>
-              {`Uploading files: ${Math.min(uploadDone || 0, uploadTotal)}/${uploadTotal}`}
-            </Text>
-          ) : null}
-          {files.length ? (
-            <Text style={styles.processingCountText}>
-              {`Files in section: ${files.length}`}
-            </Text>
-          ) : null}
-        </View>
-        ) : isVideo ? (
-        <View style={mediaRotateLayerStyle}>
-          <Animated.View style={[styles.media, styles.videoSurface, { opacity: videoFade }]}>
-            <NativeVideoPlayer
-              key={`video-player-${videoReloadToken}-${String(videoViewType)}`}
-              src={effectiveVideoUri}
-              style={styles.media}
-              rotation={0}
-              muted={false}
-              startPositionMs={resumePositionMs}
-              resizeMode={mediaResizeMode}
-              repeat={files.length === 1 && !forceLocalRestart}
-              onEnd={() => {
+        <SlideRendererMediaStage
+          showProcessingOverlay={showProcessingOverlay}
+          processingMessage={String(processingMessage || "")}
+          uploadTotal={uploadTotal}
+          uploadDone={uploadDone}
+          files={files}
+          isVideo={isVideo}
+          isPdf={isPdf}
+          isText={isText}
+          mediaRotateLayerStyle={mediaRotateLayerStyle}
+          styles={styles}
+          videoFade={videoFade}
+          videoReloadToken={videoReloadToken}
+          videoViewType={String(videoViewType)}
+          effectiveVideoUri={effectiveVideoUri}
+          resumePositionMs={resumePositionMs}
+          mediaResizeMode={mediaResizeMode}
+          forceLocalRestart={forceLocalRestart}
+          pdfReloadToken={pdfReloadToken}
+          pdfSlotUrls={pdfSlotUrls}
+          pdfVisibleSlot={pdfVisibleSlot}
+          imageVisibleSlot={imageVisibleSlot}
+          imageSlotUrls={imageSlotUrls}
+          slideImageTrackEnabled={slideImageTrackEnabled}
+          activeImageUri={activeImageUri}
+          nextImageUri={nextImageUri}
+          transitionDirection={transitionDirection}
+          backdropTranslateX={backdropTranslateX}
+          backdropTranslateY={backdropTranslateY}
+          slideDistanceX={slideDistanceX}
+          slideDistanceY={slideDistanceY}
+          nextImageSlot={nextImageSlot}
+          textContent={textContent}
+          showBufferIndicator={showBufferIndicator}
+          videoBuffering={videoBuffering}
+          isMarkedCached={isMarkedCached}
+          bufferingReason={bufferingReason}
+          onVideoEnd={() => {
                 videoProgressRef.current = { positionMs: 0, durationMs: 0 };
                 setResumePositionMs(0);
                 clearSavedPlaybackPosition(file).catch(() => {
@@ -2377,8 +2133,8 @@ export default function SlideRenderer({
                   }
                   queuePlaylistAdvance(file);
                 }
-              }}
-              onReady={() => {
+          }}
+          onVideoReady={() => {
                 videoRetryCountRef.current = 0;
                 videoReadyRef.current = true;
                 setVideoBuffering(false);
@@ -2402,8 +2158,8 @@ export default function SlideRenderer({
                   easing: Easing.out(Easing.cubic),
                   useNativeDriver: true,
                 }).start();
-              }}
-              onProgress={(event) => {
+          }}
+          onVideoProgress={(event) => {
                 const positionMs = Math.max(
                   0,
                   Math.round(Number(event?.nativeEvent?.positionMs || 0))
@@ -2463,8 +2219,8 @@ export default function SlideRenderer({
                 ) {
                   queuePlaylistAdvance(file);
                 }
-              }}
-              onBuffering={(event) => {
+          }}
+          onVideoBuffering={(event) => {
                 const buffering = !!event?.nativeEvent?.buffering;
                 const localUri = normalizeMediaUri(String(file?.remoteUrl || ""));
                 const hasLocalPlayable = isLocalPlayableUri(localUri) || isLocalPlayableUri(uri);
@@ -2499,158 +2255,12 @@ export default function SlideRenderer({
                   setShowBufferIndicator(false);
                   setDownloadConcurrencyOverride(null);
                 }
-              }}
-              onError={() => handleRenderError()}
-            />
-          </Animated.View>
-          {showBufferIndicator && videoBuffering && !isMarkedCached ? (
-            <View style={styles.bufferOverlay}>
-              <View style={styles.bufferRing}>
-                <ActivityIndicator size="small" color="#8fffe7" />
-              </View>
-              <Text style={styles.bufferHint}>{bufferingReason}</Text>
-            </View>
-          ) : null}
-        </View>
-        ) : isPdf ? (
-        <View style={mediaRotateLayerStyle}>
-          {pdfSlotUrls.a ? (
-            <WebView
-              key={`pdf-a-${pdfReloadToken}`}
-              source={{ uri: pdfSlotUrls.a }}
-              style={[
-                styles.media,
-                styles.pdfLayer,
-                pdfVisibleSlot === "a" ? styles.pdfVisible : styles.pdfHidden,
-              ]}
-              javaScriptEnabled
-              domStorageEnabled
-              allowsInlineMediaPlayback
-              setSupportMultipleWindows={false}
-              mixedContentMode="always"
-              mediaPlaybackRequiresUserAction={false}
-              onLoadEnd={() => handlePdfLoadEnd("a")}
-              onError={handlePdfError}
-            />
-          ) : null}
-          {pdfSlotUrls.b ? (
-            <WebView
-              key={`pdf-b-${pdfReloadToken}`}
-              source={{ uri: pdfSlotUrls.b }}
-              style={[
-                styles.media,
-                styles.pdfLayer,
-                pdfVisibleSlot === "b" ? styles.pdfVisible : styles.pdfHidden,
-              ]}
-              javaScriptEnabled
-              domStorageEnabled
-              allowsInlineMediaPlayback
-              setSupportMultipleWindows={false}
-              mixedContentMode="always"
-              mediaPlaybackRequiresUserAction={false}
-              onLoadEnd={() => handlePdfLoadEnd("b")}
-              onError={handlePdfError}
-            />
-          ) : null}
-        </View>
-        ) : isText ? (
-        <View style={[mediaRotateLayerStyle, styles.textWrap]}>
-          <ScrollView
-            style={styles.media}
-            contentContainerStyle={styles.textContentWrap}
-            showsVerticalScrollIndicator={false}
-          >
-            <Text style={styles.textContent}>
-              {textContent || "No text content"}
-            </Text>
-          </ScrollView>
-        </View>
-        ) : slideImageTrackEnabled && activeImageUri && nextImageUri ? (
-        <View style={mediaRotateLayerStyle}>
-          <Animated.View
-            style={[
-              styles.imageTrack,
-              {
-                transform: [
-                  {
-                    translateX:
-                      transitionDirection === "left" || transitionDirection === "right"
-                        ? backdropTranslateX
-                        : 0,
-                  },
-                  {
-                    translateY:
-                      transitionDirection === "top" || transitionDirection === "bottom"
-                        ? backdropTranslateY
-                        : 0,
-                  },
-                ],
-              },
-            ]}
-          >
-            <Image
-              source={{ uri: activeImageUri }}
-              style={[
-                styles.media,
-                styles.imageTrackItem,
-                styles.imageTrackCurrent,
-              ]}
-              resizeMode={mediaResizeMode}
-              fadeDuration={0}
-              onError={handleRenderError}
-            />
-            <Image
-              source={{ uri: nextImageUri }}
-              style={[
-                styles.media,
-                styles.imageTrackItem,
-                transitionDirection === "left"
-                  ? { left: slideDistanceX }
-                  : transitionDirection === "right"
-                  ? { left: -slideDistanceX }
-                  : transitionDirection === "top"
-                  ? { top: slideDistanceY }
-                  : { top: -slideDistanceY },
-              ]}
-              resizeMode={mediaResizeMode}
-              fadeDuration={0}
-              onLoad={() => handleImageLoadEnd(nextImageSlot)}
-              onError={handleRenderError}
-            />
-          </Animated.View>
-        </View>
-        ) : (
-        <View style={mediaRotateLayerStyle}>
-          {imageSlotUrls.a ? (
-            <Image
-              source={{ uri: imageSlotUrls.a }}
-              style={[
-                styles.media,
-                styles.imageLayer,
-                imageVisibleSlot === "a" ? styles.imageVisible : styles.imageHidden,
-              ]}
-              resizeMode={mediaResizeMode}
-              fadeDuration={0}
-              onLoad={() => handleImageLoadEnd("a")}
-              onError={handleRenderError}
-            />
-          ) : null}
-          {imageSlotUrls.b ? (
-            <Image
-              source={{ uri: imageSlotUrls.b }}
-              style={[
-                styles.media,
-                styles.imageLayer,
-                imageVisibleSlot === "b" ? styles.imageVisible : styles.imageHidden,
-              ]}
-              resizeMode={mediaResizeMode}
-              fadeDuration={0}
-              onLoad={() => handleImageLoadEnd("b")}
-              onError={handleRenderError}
-            />
-          ) : null}
-        </View>
-        )}
+          }}
+          onRenderError={handleRenderError}
+          onPdfLoadEnd={handlePdfLoadEnd}
+          onPdfError={handlePdfError}
+          onImageLoadEnd={handleImageLoadEnd}
+        />
       </Animated.View>
     </View>
   );

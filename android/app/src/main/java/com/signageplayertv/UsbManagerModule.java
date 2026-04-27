@@ -44,13 +44,17 @@ import java.util.concurrent.Executors;
 
 public class UsbManagerModule extends ReactContextBaseJavaModule {
     private static final String TAG = "UsbManagerModule";
-    private static final long USB_DEBOUNCE_MS = 900L;
+    private static final long USB_DEBOUNCE_MS = 250L;
     private static final String ADS_DIR_NAME = "Ads";
     private static final List<String> SUPPORTED_EXTENSIONS = Arrays.asList(
             ".mp4",
+            ".m4v",
+            ".mov",
             ".mkv",
+            ".webm",
             ".movie",
             ".jpg",
+            ".jpeg",
             ".png"
     );
 
@@ -117,6 +121,7 @@ public class UsbManagerModule extends ReactContextBaseJavaModule {
         filter.addAction(Intent.ACTION_MEDIA_REMOVED);
         filter.addAction(Intent.ACTION_MEDIA_UNMOUNTED);
         filter.addAction(Intent.ACTION_MEDIA_EJECT);
+        filter.addAction(Intent.ACTION_MEDIA_BAD_REMOVAL);
         filter.addDataScheme("file");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             reactContext.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
@@ -195,7 +200,7 @@ public class UsbManagerModule extends ReactContextBaseJavaModule {
                 return UsbState.withMediaItems(mountPath, checkedMounts, documentFiles);
             }
 
-            File adsDir = new File(mountRoot, ADS_DIR_NAME);
+            File adsDir = resolveAdsDirectory(mountRoot);
             Log.d(
                     TAG,
                     "raw folder path=" + adsDir.getAbsolutePath()
@@ -323,7 +328,7 @@ public class UsbManagerModule extends ReactContextBaseJavaModule {
                                 String.valueOf(name == null ? "" : name),
                                 "usb://" + volumeName + "/" + String.valueOf(name == null ? "" : name),
                                 contentUri.toString(),
-                                "",
+                                String.valueOf(dataPath == null ? "" : dataPath),
                                 normalizeMimeType(name, mimeType),
                                 size,
                                 modifiedSeconds > 0L ? modifiedSeconds * 1000L : 0L
@@ -416,6 +421,7 @@ public class UsbManagerModule extends ReactContextBaseJavaModule {
 
     private List<File> resolveCandidateMounts() {
         List<File> results = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
         try {
             StorageManager storageManager =
                     (StorageManager) reactContext.getSystemService(Context.STORAGE_SERVICE);
@@ -429,23 +435,25 @@ public class UsbManagerModule extends ReactContextBaseJavaModule {
                     }
                     File dir = volume.getDirectory();
                     if (dir != null && dir.exists()) {
-                        results.add(dir);
+                        addCandidateMount(results, seen, dir);
                     }
                 }
             }
         } catch (Exception ignored) {
         }
 
-        if (results.isEmpty()) {
-            File storageRoot = new File("/storage");
-            File[] children = storageRoot.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    if (child == null || !child.isDirectory()) continue;
-                    String name = child.getName();
-                    if ("emulated".equalsIgnoreCase(name) || "self".equalsIgnoreCase(name)) continue;
-                    results.add(child);
-                }
+        List<File> fallbackRoots = Arrays.asList(
+                new File("/storage"),
+                new File("/mnt/media_rw")
+        );
+        for (File root : fallbackRoots) {
+            File[] children = root.listFiles();
+            if (children == null) continue;
+            for (File child : children) {
+                if (child == null || !child.isDirectory()) continue;
+                String name = child.getName();
+                if ("emulated".equalsIgnoreCase(name) || "self".equalsIgnoreCase(name)) continue;
+                addCandidateMount(results, seen, child);
             }
         }
 
@@ -460,31 +468,63 @@ public class UsbManagerModule extends ReactContextBaseJavaModule {
 
     private List<File> collectPlayableFiles(File adsDir) {
         List<File> collected = new ArrayList<>();
-        File[] children = adsDir.listFiles();
+        collectPlayableFilesRecursive(adsDir, collected);
+        Collections.sort(collected, Comparator.comparing(file -> file.getAbsolutePath().toLowerCase(Locale.US)));
+        return collected;
+    }
+
+    private void collectPlayableFilesRecursive(File dir, List<File> collected) {
+        if (dir == null || collected == null) return;
+        if (!dir.exists() || !dir.isDirectory()) return;
+
+        File[] children = dir.listFiles();
         if (children == null) {
-            Log.d(TAG, "listFiles returned null for " + adsDir.getAbsolutePath());
-            return collected;
+            Log.d(TAG, "listFiles returned null for " + dir.getAbsolutePath());
+            return;
         }
-        Log.d(TAG, "listFiles count=" + children.length + " for " + adsDir.getAbsolutePath());
+        Log.d(TAG, "listFiles count=" + children.length + " for " + dir.getAbsolutePath());
         Arrays.sort(children, Comparator.comparing(File::getName, String.CASE_INSENSITIVE_ORDER));
         for (File child : children) {
             if (child == null) continue;
-            Log.d(
-                    TAG,
-                    "raw child path=" + child.getAbsolutePath()
-                            + " isFile=" + child.isFile()
-                            + " canRead=" + child.canRead()
-                            + " size=" + child.length()
-            );
+            if (child.isDirectory()) {
+                collectPlayableFilesRecursive(child, collected);
+                continue;
+            }
             if (!child.isFile() || !child.canRead()) continue;
             String lowerName = child.getName().toLowerCase(Locale.US);
-            Log.d(TAG, "raw child name=" + lowerName);
             if (!isSupportedFile(lowerName)) continue;
             if (child.length() <= 0L) continue;
             Log.d(TAG, "accepted raw file=" + child.getAbsolutePath());
             collected.add(child);
         }
-        return collected;
+    }
+
+    private File resolveAdsDirectory(File mountRoot) {
+        if (mountRoot == null) return new File("/", ADS_DIR_NAME);
+        File exact = new File(mountRoot, ADS_DIR_NAME);
+        if (exact.exists() && exact.isDirectory()) {
+            return exact;
+        }
+        File[] children = mountRoot.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                if (child == null || !child.isDirectory()) continue;
+                if (ADS_DIR_NAME.equalsIgnoreCase(child.getName())) {
+                    return child;
+                }
+            }
+        }
+        return exact;
+    }
+
+    private void addCandidateMount(List<File> results, Set<String> seen, File dir) {
+        if (dir == null || results == null || seen == null) return;
+        String path = dir.getAbsolutePath();
+        if (TextUtils.isEmpty(path)) return;
+        String normalized = path.replace('\\', '/').trim().toLowerCase(Locale.US);
+        if (seen.contains(normalized)) return;
+        seen.add(normalized);
+        results.add(dir);
     }
 
     private boolean isSupportedFile(String lowerName) {
@@ -665,9 +705,12 @@ public class UsbManagerModule extends ReactContextBaseJavaModule {
     private static String resolveMimeType(String fileName) {
         String lower = String.valueOf(fileName == null ? "" : fileName).toLowerCase(Locale.US);
         if (lower.endsWith(".mp4")) return "video/mp4";
+        if (lower.endsWith(".m4v")) return "video/mp4";
+        if (lower.endsWith(".mov")) return "video/quicktime";
         if (lower.endsWith(".mkv")) return "video/x-matroska";
+        if (lower.endsWith(".webm")) return "video/webm";
         if (lower.endsWith(".movie")) return "video/*";
-        if (lower.endsWith(".jpg")) return "image/jpeg";
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
         if (lower.endsWith(".png")) return "image/png";
         return "application/octet-stream";
     }

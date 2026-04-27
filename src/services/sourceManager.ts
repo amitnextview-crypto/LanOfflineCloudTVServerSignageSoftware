@@ -1,7 +1,12 @@
 import type { MediaItem } from "./mediaService";
+import {
+  createInitialSourcePolicyState,
+  reduceBrowserCmsState,
+  reduceCmsUpdate,
+  reduceUsbState,
+  type PlaybackSource,
+} from "./sourcePolicy";
 import type { UsbState } from "./usbManagerModule";
-
-export type PlaybackSource = "USB" | "CMS_ONLINE" | "CMS_OFFLINE";
 
 export type SourceSnapshot = {
   activeSource: PlaybackSource;
@@ -37,15 +42,7 @@ type InternalState = {
 
 export class SourceManager {
   private listeners = new Set<SourceListener>();
-  private state: InternalState = {
-    activeSource: "CMS_OFFLINE",
-    browserCmsActive: false,
-    usbMounted: false,
-    usbHasPlayableMedia: false,
-    usbPlaylist: [],
-    usbMountPath: "",
-    usbSuppressed: false,
-  };
+  private state: InternalState = createInitialSourcePolicyState();
 
   subscribe(listener: SourceListener) {
     this.listeners.add(listener);
@@ -54,63 +51,22 @@ export class SourceManager {
   }
 
   setBrowserCmsActive(active: boolean) {
-    this.state.browserCmsActive = !!active;
-    this.recompute("cms-availability");
+    this.state = reduceBrowserCmsState(this.state, active);
+    this.emit();
   }
 
   onUsbState(state: UsbState) {
-    const mounted = !!state.mounted;
-    const previousMountPath = this.state.usbMountPath;
-    const mountPath = String(state.mountPath || "");
-    const mountChanged = previousMountPath !== mountPath;
-
-    this.state.usbMounted = mounted;
-    this.state.usbHasPlayableMedia = !!state.hasPlayableMedia;
-    this.state.usbPlaylist = Array.isArray(state.playlist) ? state.playlist : [];
-    this.state.usbMountPath = mountPath;
-
-    // Any physical mount state change allows USB to compete again.
-    if (!mounted || mountChanged) {
-      this.state.usbSuppressed = false;
-    }
-
-    this.recompute("usb-state");
+    this.state = reduceUsbState(this.state, state);
+    this.emit();
   }
 
   onCmsUpdate() {
-    if (this.state.activeSource === "USB") {
-      // A fresh CMS push should immediately reclaim playback until USB changes again.
-      this.state.usbSuppressed = true;
-    }
-    this.recompute("cms-update");
+    this.state = reduceCmsUpdate(this.state);
+    this.emit();
   }
 
   getSnapshot() {
     return createSnapshot(this.state);
-  }
-
-  private recompute(_reason: string) {
-    const nextSource = this.pickSource();
-    const changed =
-      nextSource !== this.state.activeSource;
-
-    if (changed) {
-      this.state.activeSource = nextSource;
-    }
-
-    this.emit();
-  }
-
-  private pickSource(): PlaybackSource {
-    if (
-      this.state.usbMounted &&
-      this.state.usbHasPlayableMedia &&
-      this.state.usbPlaylist.length > 0 &&
-      !this.state.usbSuppressed
-    ) {
-      return "USB";
-    }
-    return this.state.browserCmsActive ? "CMS_ONLINE" : "CMS_OFFLINE";
   }
 
   private emit() {
@@ -120,4 +76,3 @@ export class SourceManager {
     }
   }
 }
-
