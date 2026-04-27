@@ -187,6 +187,8 @@ export default function App() {
   const [licenseInput, setLicenseInput] = useState("");
   const [licenseStatus, setLicenseStatus] = useState("Checking activation...");
   const [licenseBusy, setLicenseBusy] = useState(false);
+  const [licenseInputFocused, setLicenseInputFocused] = useState(false);
+  const [licenseButtonFocused, setLicenseButtonFocused] = useState(false);
   const [lastError, setLastError] = useState<RuntimeErrorInfo | null>(null);
   const [sourceSnapshot, setSourceSnapshot] = useState<SourceSnapshot>(INITIAL_SOURCE_SNAPSHOT);
   const [offlineNotice, setOfflineNotice] = useState("");
@@ -2070,22 +2072,33 @@ export default function App() {
             <TextInput
               value={licenseInput}
               onChangeText={setLicenseInput}
+              onFocus={() => setLicenseInputFocused(true)}
+              onBlur={() => setLicenseInputFocused(false)}
               autoCapitalize="characters"
               autoCorrect={false}
               placeholder="Enter key"
               placeholderTextColor="rgba(210,220,232,0.45)"
-              style={styles.licenseInput}
+              style={[
+                styles.licenseInput,
+                licenseInputFocused ? styles.licenseInputFocused : null,
+              ]}
+              focusable
+              hasTVPreferredFocus
             />
           </View>
 
           <Pressable
             onPress={onActivateLicense}
+            onFocus={() => setLicenseButtonFocused(true)}
+            onBlur={() => setLicenseButtonFocused(false)}
             disabled={licenseBusy}
             style={({ pressed }) => [
               styles.licenseBtn,
+              licenseButtonFocused ? styles.licenseBtnFocused : null,
               pressed && !licenseBusy ? { opacity: 0.85 } : null,
               licenseBusy ? { opacity: 0.55 } : null,
             ]}
+            focusable
           >
             <Text style={styles.licenseBtnText}>
               {licenseBusy ? "Verifying..." : "Save And Activate"}
@@ -2534,12 +2547,30 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     letterSpacing: 0.4,
   },
+  licenseInputFocused: {
+    borderColor: "#8fe8ff",
+    backgroundColor: "rgba(20, 34, 46, 0.96)",
+    shadowColor: "#6ce8ff",
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+  },
   licenseBtn: {
     marginTop: 18,
     backgroundColor: "#1d8fff",
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: "center",
+  },
+  licenseBtnFocused: {
+    backgroundColor: "#4cb8ff",
+    borderWidth: 2,
+    borderColor: "#c3f4ff",
+    transform: [{ scale: 1.03 }],
+    shadowColor: "#6ce8ff",
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
   },
   licenseBtnText: {
     color: "#ffffff",
