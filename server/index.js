@@ -19,6 +19,11 @@ const {
 const { listGroups, replaceGroups, saveGroup, deleteGroup, autoCreateGroups } = require("./services/groupStore");
 const uploadQueue = require("./services/uploadQueue");
 
+if (process.env.ENABLE_PC_CMS !== "1") {
+  console.log("PC CMS is disabled. Use the TV-IP QR CMS from the APK instead.");
+  process.exit(0);
+}
+
 // Runtime writable base path (user-local in pkg mode to avoid permission issues)
 const runtimeBasePath = process.pkg
   ? path.join(
@@ -328,7 +333,7 @@ app.use(
   "/media",
   express.static(path.join(runtimeBasePath, "uploads"), {
     setHeaders: (res, filePath) => {
-      if (filePath.endsWith(".mp4")) {
+      if (filePath.match(/\.(mp4|m4v)$/i)) {
         res.setHeader("Content-Type", "video/mp4");
         res.setHeader("Accept-Ranges", "bytes");
         // Avoid long-lived device cache growth for large media.
@@ -339,7 +344,7 @@ app.use(
       }
 
       if (filePath.endsWith(".mov")) {
-        res.setHeader("Content-Type", "video/mov");
+        res.setHeader("Content-Type", "video/quicktime");
         res.setHeader("Accept-Ranges", "bytes");
         // Avoid long-lived device cache growth for large media.
         res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -352,6 +357,15 @@ app.use(
         res.setHeader("Content-Type", "video/webm");
         res.setHeader("Accept-Ranges", "bytes");
         // Avoid long-lived device cache growth for large media.
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
+        res.setHeader("Surrogate-Control", "no-store");
+      }
+
+      if (filePath.endsWith(".mkv")) {
+        res.setHeader("Content-Type", "video/x-matroska");
+        res.setHeader("Accept-Ranges", "bytes");
         res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
         res.setHeader("Pragma", "no-cache");
         res.setHeader("Expires", "0");

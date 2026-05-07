@@ -1041,8 +1041,13 @@ export default function SlideRenderer({
                 const exists = /^file:\/\//i.test(localUri) ? await RNFS.exists(localPath) : true;
                 if (exists) {
                   if (isVideoFile(activeItem)) {
-                    // Do not swap the current video source mid-run when cache finishes.
-                    // Smart TVs can blank out after this transition and stay stuck until data clear.
+                    prepareVideoReloadFromCurrentPosition();
+                    pinnedMediaUriRef.current = {
+                      identity: getMediaIdentity(activeItem),
+                      uri: localUri,
+                    };
+                    setUri(localUri);
+                    setVideoReloadToken((prev) => prev + 1);
                     return;
                   }
                   if (!uri) {

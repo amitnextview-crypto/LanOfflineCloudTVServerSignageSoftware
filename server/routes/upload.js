@@ -1,5 +1,6 @@
 const express = require("express");
 const multer = require("multer");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
@@ -17,6 +18,7 @@ const basePath = process.pkg
 const uploadsBase = path.join(basePath, "uploads");
 const ALLOWED_EXTENSIONS = new Set([
   ".mp4",
+  ".m4v",
   ".mov",
   ".mkv",
   ".webm",
@@ -34,7 +36,9 @@ const ALLOWED_EXTENSIONS = new Set([
 ]);
 const ALLOWED_MIME_TYPES = new Set([
   "video/mp4",
+  "video/x-m4v",
   "video/mov",
+  "video/quicktime",
   "video/webm",
   "video/x-matroska",
   "image/jpeg",
@@ -49,14 +53,15 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/vnd.ms-powerpoint.slideshow.macroenabled.12",
   "application/vnd.openxmlformats-officedocument.presentationml.template",
 ]);
-const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".webm"]);
+const VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".mkv", ".webm"]);
 const PPT_EXTENSIONS = new Set([".ppt", ".pptx", ".pptm", ".pps", ".ppsx", ".potx"]);
 const PPT_MARKER_NAME = ".ppt_marker";
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
+const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 * 1024; // 50 GB
 const MAX_FILES_PER_UPLOAD = 120;
-const DISABLE_UPLOAD_TRANSCODE = String(process.env.DISABLE_UPLOAD_TRANSCODE || "") === "1";
-const DIRECT_PLAY_VIDEO_EXTENSIONS = new Set([".mp4"]);
+const DISABLE_UPLOAD_TRANSCODE = String(process.env.DISABLE_UPLOAD_TRANSCODE || "1") !== "0";
+const DIRECT_PLAY_VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".mkv", ".webm"]);
 const SAFE_DEVICE_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const SAFE_UPLOAD_RE = /^[a-f0-9]{24,64}$/i;
 const activeEnterpriseJobs = new Set();
 
 function sanitizeDeviceId(value) {
@@ -151,6 +156,87 @@ function ensureDir(dirPath) {
   }
 }
 
+function safeUploadId(value) {
+  const raw = String(value || "").trim();
+  if (SAFE_UPLOAD_RE.test(raw)) return raw.toLowerCase();
+  return crypto.createHash("sha1").update(raw || `${Date.now()}_${Math.random()}`).digest("hex");
+}
+
+function chunkSessionDir(deviceId, section, uploadId) {
+  return path.join(uploadsBase, deviceId, `section${section}__chunk_${uploadId}`);
+}
+
+function chunkManifestPath(sessionDir) {
+  return path.join(sessionDir, ".chunk-manifest.json");
+}
+
+function readChunkManifest(sessionDir) {
+  try {
+    const raw = fs.readFileSync(chunkManifestPath(sessionDir), "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch {
+  }
+  return null;
+}
+
+function writeChunkManifest(sessionDir, manifest) {
+  fs.writeFileSync(chunkManifestPath(sessionDir), JSON.stringify(manifest, null, 2), "utf8");
+}
+
+function sanitizeChunkFileName(file, reqLike = {}) {
+  return sanitizeFileName(
+    {
+      originalname: file?.name || file?.originalName || "media.bin",
+      mimetype: file?.type || file?.mimeType || "",
+    },
+    reqLike
+  );
+}
+
+function buildChunkUploadId(deviceId, section, files, uploadKey) {
+  const stable = JSON.stringify({
+    deviceId,
+    section: String(section || ""),
+    uploadKey: String(uploadKey || ""),
+    files: (Array.isArray(files) ? files : []).map((file) => ({
+      name: String(file?.name || ""),
+      size: Number(file?.size || 0),
+      type: String(file?.type || ""),
+      lastModified: Number(file?.lastModified || 0),
+    })),
+  });
+  return crypto.createHash("sha1").update(stable).digest("hex");
+}
+
+function getChunkStatus(manifest) {
+  return {
+    uploadId: manifest.uploadId,
+    chunkSize: manifest.chunkSize,
+    files: (manifest.files || []).map((file) => ({
+      index: file.index,
+      name: file.originalName,
+      size: file.size,
+      storedName: file.storedName,
+      chunks: file.chunks,
+      received: Array.isArray(file.received) ? file.received : [],
+      complete: (Array.isArray(file.received) ? file.received.length : 0) >= Number(file.chunks || 0),
+    })),
+  };
+}
+
+function assertChunkFileAllowed(file) {
+  const ext = path.extname(file?.name || file?.originalName || "").toLowerCase();
+  const mime = String(file?.type || file?.mimeType || "").toLowerCase();
+  if (!ALLOWED_EXTENSIONS.has(ext) && !ALLOWED_MIME_TYPES.has(mime)) {
+    throw new Error(`Unsupported file type: ${file?.name || file?.originalName || "upload"}`);
+  }
+  const size = Number(file?.size || 0);
+  if (!Number.isFinite(size) || size < 0 || size > MAX_FILE_SIZE_BYTES) {
+    throw new Error(`File too large. Max allowed is ${Math.round(MAX_FILE_SIZE_BYTES / (1024 * 1024 * 1024))} GB per file.`);
+  }
+}
+
 function cleanDir(dirPath) {
   if (!fs.existsSync(dirPath)) return;
   const entries = fs.readdirSync(dirPath);
@@ -162,7 +248,9 @@ function cleanDir(dirPath) {
 function extFromMime(mimeType) {
   const mime = String(mimeType || "").toLowerCase();
   if (mime === "video/mp4") return ".mp4";
+  if (mime === "video/x-m4v") return ".m4v";
   if (mime === "video/mov") return ".mov";
+  if (mime === "video/quicktime") return ".mov";
   if (mime === "video/webm") return ".webm";
   if (mime === "video/x-matroska") return ".mkv";
   if (mime === "image/jpeg") return ".jpg";
@@ -890,7 +978,9 @@ async function processIncomingSection(deviceId, section, tempSectionPath, reques
       deviceId,
       section,
       "processing",
-      "Processing video for TV compatibility... Please wait."
+      DISABLE_UPLOAD_TRANSCODE || String(process.env.DISABLE_VIDEO_TRANSCODE || "") === "1"
+        ? "Activating uploaded video without transcoding..."
+        : "Processing video for TV compatibility... Please wait."
     );
     await optimizeVideosInDirectory(tempSectionPath);
   }
@@ -919,7 +1009,8 @@ async function processIncomingSection(deviceId, section, tempSectionPath, reques
   }
 
   if (global.io) {
-    const syncAt = Date.now() + 500;
+    const baseSyncAt = Date.now() + 500;
+    const syncAt = baseSyncAt;
     const timeline = updateSectionTimeline(deviceId, section, {
       targetDevice: deviceId,
       syncAt,
@@ -931,7 +1022,21 @@ async function processIncomingSection(deviceId, section, tempSectionPath, reques
         : "",
     });
     if (deviceId === "all") {
-      global.io.emit("media-updated", { syncAt, section, timeline });
+      const connectedIds = Object.keys(global.connectedDevices || {}).sort();
+      connectedIds.forEach((targetId, index) => {
+        const socketId = global.connectedDevices?.[targetId];
+        if (!socketId) return;
+        const targetSyncAt = baseSyncAt + index * 30000;
+        global.io.to(socketId).emit("media-updated", {
+          syncAt: targetSyncAt,
+          section,
+          timeline: {
+            ...timeline,
+            targetDevice: targetId,
+            syncAt: targetSyncAt,
+          },
+        });
+      });
     } else if (global.connectedDevices?.[deviceId]) {
       const socketId = global.connectedDevices[deviceId];
       global.io.to(socketId).emit("media-updated", { syncAt, section, timeline });
@@ -941,6 +1046,171 @@ async function processIncomingSection(deviceId, section, tempSectionPath, reques
   emitSectionUploadStatus(deviceId, section, "ready", "");
   return activation;
 }
+
+router.post("/:deviceId/section/:section/chunk/init", (req, res) => {
+  const deviceId = sanitizeDeviceId(req.params.deviceId);
+  if (!deviceId) {
+    return res.status(400).json({ ok: false, error: "invalid-device-id" });
+  }
+
+  try {
+    const section = req.params.section;
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (!files.length) {
+      return res.status(400).json({ ok: false, error: "files-required" });
+    }
+    if (files.length > MAX_FILES_PER_UPLOAD) {
+      return res.status(400).json({ ok: false, error: `Too many files. Max allowed is ${MAX_FILES_PER_UPLOAD} files.` });
+    }
+
+    files.forEach(assertChunkFileAllowed);
+    cleanupStaleIncomingDirs(deviceId, section);
+
+    const requestedChunkSize = Number(req.body?.chunkSize || 5 * 1024 * 1024);
+    const chunkSize = Math.max(1024 * 1024, Math.min(25 * 1024 * 1024, Math.floor(requestedChunkSize)));
+    const uploadId = safeUploadId(
+      req.body?.uploadId || buildChunkUploadId(deviceId, section, files, req.body?.uploadKey)
+    );
+    const sessionDir = chunkSessionDir(deviceId, section, uploadId);
+    ensureDir(sessionDir);
+
+    let manifest = readChunkManifest(sessionDir);
+    if (!manifest) {
+      const reqLike = { _nameCounter: {} };
+      manifest = {
+        uploadId,
+        deviceId,
+        section: String(section),
+        chunkSize,
+        containsPpt: String(req.body?.containsPpt || "").trim() === "1",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        files: files.map((file, index) => {
+          const storedName = sanitizeChunkFileName(file, reqLike);
+          return {
+            index,
+            originalName: String(file?.name || "media.bin"),
+            storedName,
+            type: String(file?.type || ""),
+            size: Number(file?.size || 0),
+            chunks: Math.max(1, Math.ceil(Number(file?.size || 0) / chunkSize)),
+            received: [],
+          };
+        }),
+      };
+      writeChunkManifest(sessionDir, manifest);
+    }
+
+    return res.json({ ok: true, ...getChunkStatus(manifest) });
+  } catch (error) {
+    const message = humanizeUploadError(error, "Chunk upload init failed");
+    return res.status(400).json({ ok: false, error: message });
+  }
+});
+
+router.get("/:deviceId/section/:section/chunk/:uploadId/status", (req, res) => {
+  const deviceId = sanitizeDeviceId(req.params.deviceId);
+  const uploadId = safeUploadId(req.params.uploadId);
+  if (!deviceId) {
+    return res.status(400).json({ ok: false, error: "invalid-device-id" });
+  }
+  const sessionDir = chunkSessionDir(deviceId, req.params.section, uploadId);
+  const manifest = readChunkManifest(sessionDir);
+  if (!manifest) return res.status(404).json({ ok: false, error: "upload-session-not-found" });
+  return res.json({ ok: true, ...getChunkStatus(manifest) });
+});
+
+router.post(
+  "/:deviceId/section/:section/chunk/:uploadId/file/:fileIndex/part/:chunkIndex",
+  express.raw({ type: "*/*", limit: "30mb" }),
+  (req, res) => {
+    const deviceId = sanitizeDeviceId(req.params.deviceId);
+    const uploadId = safeUploadId(req.params.uploadId);
+    if (!deviceId) {
+      return res.status(400).json({ ok: false, error: "invalid-device-id" });
+    }
+
+    try {
+      const sessionDir = chunkSessionDir(deviceId, req.params.section, uploadId);
+      const manifest = readChunkManifest(sessionDir);
+      if (!manifest) return res.status(404).json({ ok: false, error: "upload-session-not-found" });
+
+      const fileIndex = Number(req.params.fileIndex);
+      const chunkIndex = Number(req.params.chunkIndex);
+      const fileMeta = (manifest.files || []).find((file) => Number(file.index) === fileIndex);
+      if (!fileMeta) return res.status(404).json({ ok: false, error: "upload-file-not-found" });
+      if (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= Number(fileMeta.chunks || 0)) {
+        return res.status(400).json({ ok: false, error: "invalid-chunk-index" });
+      }
+
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || "");
+      const offset = chunkIndex * Number(manifest.chunkSize || 0);
+      const expectedEnd = Math.min(Number(fileMeta.size || 0), offset + Number(manifest.chunkSize || 0));
+      const expectedBytes = Math.max(0, expectedEnd - offset);
+      if (body.length !== expectedBytes) {
+        return res.status(400).json({ ok: false, error: "chunk-size-mismatch" });
+      }
+
+      const targetPath = path.join(sessionDir, fileMeta.storedName);
+      const fd = fs.openSync(targetPath, "a+");
+      try {
+        fs.writeSync(fd, body, 0, body.length, offset);
+      } finally {
+        fs.closeSync(fd);
+      }
+
+      const received = new Set(Array.isArray(fileMeta.received) ? fileMeta.received.map(Number) : []);
+      received.add(chunkIndex);
+      fileMeta.received = Array.from(received).sort((a, b) => a - b);
+      manifest.updatedAt = Date.now();
+      writeChunkManifest(sessionDir, manifest);
+      return res.json({ ok: true, fileIndex, chunkIndex, received: fileMeta.received });
+    } catch (error) {
+      const message = humanizeUploadError(error, "Chunk upload failed");
+      return res.status(500).json({ ok: false, error: message });
+    }
+  }
+);
+
+router.post("/:deviceId/section/:section/chunk/:uploadId/complete", async (req, res) => {
+  const deviceId = sanitizeDeviceId(req.params.deviceId);
+  const uploadId = safeUploadId(req.params.uploadId);
+  if (!deviceId) {
+    return res.status(400).json({ ok: false, error: "invalid-device-id" });
+  }
+
+  const sessionDir = chunkSessionDir(deviceId, req.params.section, uploadId);
+  try {
+    const manifest = readChunkManifest(sessionDir);
+    if (!manifest) return res.status(404).json({ ok: false, error: "upload-session-not-found" });
+
+    for (const fileMeta of manifest.files || []) {
+      const received = new Set(Array.isArray(fileMeta.received) ? fileMeta.received.map(Number) : []);
+      if (received.size < Number(fileMeta.chunks || 0)) {
+        return res.status(409).json({ ok: false, error: "upload-incomplete", status: getChunkStatus(manifest) });
+      }
+      const fullPath = path.join(sessionDir, fileMeta.storedName);
+      const stat = safeStat(fullPath, { retries: 6 });
+      if (!stat || Number(stat.size || 0) !== Number(fileMeta.size || 0)) {
+        return res.status(409).json({ ok: false, error: "uploaded-size-mismatch", status: getChunkStatus(manifest) });
+      }
+    }
+
+    try {
+      fs.rmSync(chunkManifestPath(sessionDir), { force: true });
+    } catch {
+    }
+
+    await processIncomingSection(deviceId, req.params.section, sessionDir, {
+      containsPpt: manifest.containsPpt ? "1" : req.body?.containsPpt,
+    });
+    return res.json({ ok: true, success: true });
+  } catch (error) {
+    const message = humanizeUploadError(error, "Chunk upload complete failed");
+    emitSectionUploadStatus(deviceId, req.params.section, "error", message);
+    return res.status(500).json({ ok: false, error: message });
+  }
+});
 
 router.post("/:deviceId/section/:section", (req, res, next) => {
   const deviceId = sanitizeDeviceId(req.params.deviceId);

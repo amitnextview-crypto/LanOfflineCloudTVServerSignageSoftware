@@ -6,6 +6,7 @@ import {
 } from "./mediaService";
 
 const USB_SOURCE_ID = "usb";
+const INSTANT_STREAM_SOURCE_ID = "instant-stream";
 
 export class PlaybackController {
   playUsbPlaylist(playlist: MediaItem[]) {
@@ -14,6 +15,14 @@ export class PlaybackController {
 
   stopUsbPlayback() {
     clearPlaybackOverride(USB_SOURCE_ID);
+  }
+
+  playInstantStream(item: MediaItem) {
+    setPlaybackOverride(INSTANT_STREAM_SOURCE_ID, [item]);
+  }
+
+  stopInstantStream() {
+    clearPlaybackOverride(INSTANT_STREAM_SOURCE_ID);
   }
 
   buildUsbConfig(baseConfig: AppConfig | any) {

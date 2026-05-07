@@ -32,6 +32,11 @@ export default function CmsAccessCard({
   const [nameInput, setNameInput] = useState(info.deviceName || "");
   const [openFocused, setOpenFocused] = useState(false);
   const [saveFocused, setSaveFocused] = useState(false);
+  const accessUrl = info.publicUrl || info.localUrl;
+  const displayIp =
+    info.ipAddress ||
+    String(accessUrl || "").match(/^https?:\/\/([^/:]+)/i)?.[1] ||
+    "";
 
   useEffect(() => {
     const refresh = () => {
@@ -40,8 +45,12 @@ export default function CmsAccessCard({
       setNameInput((current) => current || next.deviceName || "");
     };
     refresh();
-    const timer = setInterval(refresh, 10000);
-    return () => clearInterval(timer);
+    const warmupTimer = setTimeout(refresh, 1500);
+    const timer = setInterval(refresh, 5000);
+    return () => {
+      clearTimeout(warmupTimer);
+      clearInterval(timer);
+    };
   }, []);
 
   const onSaveName = () => {
@@ -91,6 +100,7 @@ export default function CmsAccessCard({
           </View>
         )}
         <Text style={styles.scanHint}>Scan to open CMS</Text>
+        <Text selectable style={styles.qrIpText}>{displayIp || "IP not available"}</Text>
         {!!onOpenCms && (
           <Pressable
             onPress={onOpenCms}
@@ -138,13 +148,13 @@ export default function CmsAccessCard({
         </View>
 
         <Text style={styles.sectionLabel}>Access URL</Text>
-        <Text selectable style={styles.metaValue}>{info.publicUrl || info.localUrl}</Text>
+        <Text selectable style={styles.metaValue}>{accessUrl}</Text>
 
         <Text style={styles.sectionLabel}>Device ID</Text>
         <Text selectable style={styles.metaValue}>{info.deviceId || "unknown"}</Text>
 
         <Text style={styles.sectionLabel}>IP Address</Text>
-        <Text selectable style={styles.metaValue}>{info.ipAddress || "Not available"}</Text>
+        <Text selectable style={styles.metaValue}>{displayIp || "Not available"}</Text>
 
         <Text style={styles.sectionLabel}>.local Hostname</Text>
         <Text selectable style={styles.metaValue}>{info.hostname || "Not available"}</Text>
@@ -214,6 +224,13 @@ const styles = StyleSheet.create({
     marginTop: 8,
     color: "rgba(215, 229, 240, 0.82)",
     fontSize: 12,
+    textAlign: "center",
+  },
+  qrIpText: {
+    marginTop: 4,
+    color: "#f1f8ff",
+    fontSize: 12,
+    lineHeight: 16,
     textAlign: "center",
   },
   openBtn: {

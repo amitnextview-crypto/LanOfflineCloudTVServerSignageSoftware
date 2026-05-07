@@ -25,8 +25,10 @@ import org.json.JSONObject;
 
 import java.lang.ref.WeakReference;
 import java.io.File;
+import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.Inet4Address;
+import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -330,6 +332,24 @@ public final class EmbeddedCmsRuntime {
         } catch (Exception ignored) {
         }
         try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            for (NetworkInterface intf : Collections.list(interfaces)) {
+                try {
+                    if (!intf.isUp() || intf.isLoopback() || intf.isVirtual()) continue;
+                } catch (Exception ignored) {
+                }
+                Enumeration<InetAddress> addrs = intf.getInetAddresses();
+                for (InetAddress addr : Collections.list(addrs)) {
+                    String host = sanitizeIpv4(addr);
+                    if (host.isEmpty()) continue;
+                    return host;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        String socketIp = getSocketSelectedIpv4();
+        if (!socketIp.isEmpty()) return socketIp;
+        try {
             WifiManager wifiManager = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             if (wifiManager != null && wifiManager.getConnectionInfo() != null) {
                 int ip = wifiManager.getConnectionInfo().getIpAddress();
@@ -347,6 +367,23 @@ public final class EmbeddedCmsRuntime {
         } catch (Exception ignored) {
         }
         return "";
+    }
+
+    private static String getSocketSelectedIpv4() {
+        DatagramSocket socket = null;
+        try {
+            socket = new DatagramSocket();
+            socket.connect(new InetSocketAddress("8.8.8.8", 80));
+            String host = sanitizeIpv4(socket.getLocalAddress());
+            return host.isEmpty() ? "" : host;
+        } catch (Exception ignored) {
+            return "";
+        } finally {
+            try {
+                if (socket != null) socket.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private static String getActiveNetworkIpv4(Context context) {

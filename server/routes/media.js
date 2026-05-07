@@ -8,9 +8,11 @@ const router = express.Router();
 const BASE_DIR = process.pkg
   ? path.join(global.runtimeBasePath || path.dirname(process.execPath), "uploads")
   : path.join(__dirname, "../uploads");
-const ALLOWED_MEDIA_EXT = /\.(mp4|mov|mkv|webm|jpg|jpeg|png|txt|pdf)$/i;
+const ALLOWED_MEDIA_EXT = /\.(mp4|m4v|mov|mkv|webm|jpg|jpeg|png|txt|pdf)$/i;
 const HASH_CACHE = new Map();
 const SAFE_DEVICE_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const VIDEO_MEDIA_EXT = /\.(mp4|m4v|mov|mkv|webm)$/i;
+const MEDIA_HASH_MAX_BYTES = 64 * 1024 * 1024;
 
 function sanitizeDeviceId(value) {
   const id = String(value || "").trim();
@@ -31,6 +33,8 @@ function estimatePdfPageCount(filePath) {
 
 function getFileHash(fullPath, stat) {
   try {
+    const size = Number(stat?.size || 0);
+    if (VIDEO_MEDIA_EXT.test(fullPath) && size > MEDIA_HASH_MAX_BYTES) return "";
     const cacheKey = `${fullPath}|${Number(stat?.mtimeMs || 0)}|${Number(stat?.size || 0)}`;
     const cached = HASH_CACHE.get(cacheKey);
     if (cached) return cached;
@@ -152,7 +156,7 @@ router.get("/", (req, res) => {
       const relative = path
         .relative(BASE_DIR, fullPath)
         .replace(/\\/g, "/");
-      const baseUrl = `/media/${relative}`;
+      const baseUrl = `/media/${relative}?v=${Number(stat.mtimeMs || 0)}`;
 
       const hash = getFileHash(fullPath, stat);
       if (ext === ".pdf") {

@@ -74,6 +74,7 @@ public class NativeVideoPlayerView extends FrameLayout implements LifecycleEvent
     };
     private static SimpleCache videoCache;
     private static final long VIDEO_CACHE_DEFAULT_BYTES = 128L * 1024 * 1024; // 128MB
+    private static final int LARGE_VIDEO_TARGET_BUFFER_BYTES = 32 * 1024 * 1024;
     private static long videoCacheMaxBytes = VIDEO_CACHE_DEFAULT_BYTES;
 
     public NativeVideoPlayerView(@NonNull Context context, @NonNull ReactContext reactContext) {
@@ -86,7 +87,7 @@ public class NativeVideoPlayerView extends FrameLayout implements LifecycleEvent
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
         this.playerView.setKeepScreenOn(true);
-        this.playerView.setKeepContentOnPlayerReset(true);
+        this.playerView.setKeepContentOnPlayerReset(false);
         this.playerView.setShutterBackgroundColor(Color.TRANSPARENT);
         applyResizeMode();
         applyRotation();
@@ -244,35 +245,28 @@ public class NativeVideoPlayerView extends FrameLayout implements LifecycleEvent
 
         DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
-                        4000,
-                        30000,
-                        750,
-                        1500
+                        1000,
+                        8000,
+                        250,
+                        500
                 )
-                .setTargetBufferBytes(C.LENGTH_UNSET)
+                .setTargetBufferBytes(8 * 1024 * 1024)
                 .setPrioritizeTimeOverSizeThresholds(true)
+                .setBackBuffer(0, false)
                 .build();
 
         DefaultHttpDataSource.Factory httpFactory = new DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(20000)
-                .setReadTimeoutMs(45000);
+                .setReadTimeoutMs(120000);
         DefaultDataSource.Factory upstreamFactory = new DefaultDataSource.Factory(getContext(), httpFactory);
-        CacheDataSink.Factory cacheSinkFactory = new CacheDataSink.Factory()
-                .setCache(getVideoCache(getContext()))
-                .setFragmentSize(CacheDataSink.DEFAULT_FRAGMENT_SIZE);
-        CacheDataSource.Factory dataSourceFactory = new CacheDataSource.Factory()
-                .setCache(getVideoCache(getContext()))
-                .setUpstreamDataSourceFactory(upstreamFactory)
-                .setCacheWriteDataSinkFactory(cacheSinkFactory)
-                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
 
         DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(getContext())
                 .setEnableDecoderFallback(true);
 
         player = new ExoPlayer.Builder(getContext(), renderersFactory)
                 .setLoadControl(loadControl)
-                .setMediaSourceFactory(new DefaultMediaSourceFactory(dataSourceFactory))
+                .setMediaSourceFactory(new DefaultMediaSourceFactory(upstreamFactory))
                 .build();
         playerView.setPlayer(player);
         player.setVolume(muted ? 0f : 1f);
@@ -389,6 +383,16 @@ public class NativeVideoPlayerView extends FrameLayout implements LifecycleEvent
         MediaItem mediaItem = MediaItem.fromUri(Uri.parse(src));
         startPositionApplied = false;
         preparedSrc = src;
+        bufferingActive = false;
+        progressHandler.removeCallbacks(bufferingRecoveryRunnable);
+        WritableMap payload = Arguments.createMap();
+        payload.putBoolean("buffering", true);
+        dispatchEvent("topBuffer", payload);
+        try {
+            player.stop();
+            player.clearMediaItems();
+        } catch (Exception ignored) {
+        }
         player.setMediaItem(mediaItem, Math.max(0L, startPositionMs));
         player.prepare();
         player.setPlayWhenReady(!paused);

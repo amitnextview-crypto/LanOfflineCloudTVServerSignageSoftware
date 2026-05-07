@@ -21,6 +21,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.net.HttpURLConnection;
@@ -43,7 +44,9 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
     private static final String APP_UPDATE_FILE_NAME = "NVA-SignagePlayerTV-update.apk";
     private static final String KIOSK_PREFS_NAME = "kiosk_prefs";
     private static final String KEY_AUTO_REOPEN_ENABLED = "auto_reopen_enabled";
+    private static final String KEY_AUTO_REOPEN_MANUAL_OFF = "auto_reopen_manual_off";
     private static final String KEY_VIDEO_CACHE_MAX_BYTES = "video_cache_max_bytes";
+    private static final long MEDIA_HASH_MAX_BYTES = 64L * 1024L * 1024L;
     private static final String SESSION_COOKIE = "embedded_cms_session";
     private static final long SESSION_TTL_MS = 12L * 60L * 60L * 1000L;
     private static final Map<String, Long> ACTIVE_SESSIONS = new ConcurrentHashMap<>();
@@ -68,6 +71,7 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
 
     private final Context context;
     private final AssetManager assetManager;
+    private final Object chunkUploadLock = new Object();
 
     public EmbeddedCmsServer(Context context, int port) {
         super("0.0.0.0", port);
@@ -189,7 +193,7 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
                             writeConfig(merged);
                             applyConfigSideEffects(merged);
                         }
-                        EmbeddedCmsRuntime.emitEvent("config-updated", EmbeddedCmsRuntime.buildSelfStatus(context));
+                        EmbeddedCmsRuntime.emitEvent("config-updated", new JSONObject());
                         JSONObject payload = new JSONObject();
                         payload.put("success", true);
                         payload.put("config", readConfig());
@@ -236,7 +240,20 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
                 return serveUploadedApk();
             }
             if (uri.startsWith("/media/")) {
-                return serveMedia(uri.substring("/media/".length()));
+                return serveMedia(session, uri.substring("/media/".length()));
+            }
+            if ("/upload/chunk/init".equals(uri) && Method.POST.equals(session.getMethod())) {
+                int section = safeInt(session.getParms().get("section"), 1);
+                return handleChunkInit(session, section);
+            }
+            if (uri.startsWith("/upload/chunk/") && Method.POST.equals(session.getMethod())) {
+                int section = safeInt(session.getParms().get("section"), 1);
+                if (uri.endsWith("/complete")) {
+                    return handleChunkComplete(session, section, extractChunkUploadId(uri));
+                }
+                if (uri.contains("/file/") && uri.contains("/part/")) {
+                    return handleChunkPart(session, section, uri);
+                }
             }
             if ("/upload".equals(uri) && Method.POST.equals(session.getMethod())) {
                 int section = safeInt(session.getParms().get("section"), 1);
@@ -258,7 +275,9 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
         session.parseBody(files);
 
         File incomingDir = new File(getMediaRoot(), "incoming-" + section + "-" + System.currentTimeMillis());
-        incomingDir.mkdirs();
+        if (!incomingDir.mkdirs() && !incomingDir.exists()) {
+            throw new IOException("Unable to prepare upload directory.");
+        }
         List<File> staged = new ArrayList<>();
 
         for (Map.Entry<String, String> entry : files.entrySet()) {
@@ -271,8 +290,8 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
                     : temp.getName();
             String safeName = sanitizeFileName(originalName);
             if (!isAllowedMedia(safeName)) continue;
-            File dest = new File(incomingDir, safeName);
-            copyFile(temp, dest);
+            File dest = uniqueFile(incomingDir, safeName);
+            moveFileFast(temp, dest);
             staged.add(dest);
         }
 
@@ -286,11 +305,28 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
         }
 
         activateIncomingSection(incomingDir, section);
-        clearVideoCache();
+
+        long syncAt = System.currentTimeMillis();
+        JSONObject timeline = new JSONObject();
+        JSONArray mediaSignature = new JSONArray();
+        for (File file : staged) {
+            if (file != null) {
+                mediaSignature.put(file.getName());
+            }
+        }
+        timeline.put("section", section);
+        timeline.put("cycleId", section + "-local-upload-" + syncAt);
+        timeline.put("syncAt", syncAt);
+        timeline.put("updatedAt", syncAt);
+        timeline.put("fileCount", staged.size());
+        timeline.put("mediaSignature", mediaSignature.toString());
+        timeline.put("targetDevice", "local");
 
         JSONObject payload = new JSONObject();
         payload.put("section", section);
         payload.put("count", staged.size());
+        payload.put("syncAt", syncAt);
+        payload.put("timeline", timeline);
         EmbeddedCmsRuntime.emitEvent("media-updated", payload);
 
         JSONObject out = new JSONObject();
@@ -802,6 +838,323 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
         return json(out);
     }
 
+    private File getChunkSessionDir(int section, String uploadId) {
+        return new File(getMediaRoot(), "chunk-upload-section" + section + "-" + safeUploadId(uploadId));
+    }
+
+    private File getChunkManifestFile(File sessionDir) {
+        return new File(sessionDir, ".chunk-manifest.json");
+    }
+
+    private String safeUploadId(String raw) {
+        String value = String.valueOf(raw == null ? "" : raw).trim().replaceAll("[^a-zA-Z0-9_-]", "");
+        if (value.length() > 64) value = value.substring(0, 64);
+        return value;
+    }
+
+    private String extractChunkUploadId(String uri) {
+        String prefix = "/upload/chunk/";
+        String value = String.valueOf(uri == null ? "" : uri);
+        if (!value.startsWith(prefix)) return "";
+        String rest = value.substring(prefix.length());
+        int slash = rest.indexOf("/");
+        return safeUploadId(slash >= 0 ? rest.substring(0, slash) : rest);
+    }
+
+    private String uniqueStoredName(String original, Set<String> used) {
+        String safe = sanitizeFileName(original);
+        String base = safe;
+        String ext = "";
+        int dot = safe.lastIndexOf(".");
+        if (dot > 0) {
+            base = safe.substring(0, dot);
+            ext = safe.substring(dot);
+        }
+        String candidate = safe;
+        int counter = 2;
+        while (used.contains(candidate.toLowerCase(Locale.US))) {
+            candidate = base + "-" + counter + ext;
+            counter += 1;
+        }
+        used.add(candidate.toLowerCase(Locale.US));
+        return candidate;
+    }
+
+    private JSONObject findChunkFile(JSONObject manifest, int fileIndex) {
+        JSONArray files = manifest == null ? null : manifest.optJSONArray("files");
+        if (files == null) return null;
+        for (int i = 0; i < files.length(); i += 1) {
+            JSONObject item = files.optJSONObject(i);
+            if (item != null && item.optInt("index", -1) == fileIndex) return item;
+        }
+        return null;
+    }
+
+    private boolean jsonArrayContainsInt(JSONArray array, int value) {
+        if (array == null) return false;
+        for (int i = 0; i < array.length(); i += 1) {
+            if (array.optInt(i, Integer.MIN_VALUE) == value) return true;
+        }
+        return false;
+    }
+
+    private JSONObject chunkStatus(JSONObject manifest) throws Exception {
+        JSONObject out = new JSONObject();
+        out.put("success", true);
+        out.put("uploadId", manifest.optString("uploadId", ""));
+        out.put("chunkSize", manifest.optInt("chunkSize", 5 * 1024 * 1024));
+        JSONArray files = manifest.optJSONArray("files");
+        JSONArray statusFiles = new JSONArray();
+        if (files != null) {
+            for (int i = 0; i < files.length(); i += 1) {
+                JSONObject item = files.optJSONObject(i);
+                if (item == null) continue;
+                JSONObject status = new JSONObject();
+                JSONArray received = item.optJSONArray("received");
+                if (received == null) received = new JSONArray();
+                status.put("index", item.optInt("index", i));
+                status.put("name", item.optString("originalName", ""));
+                status.put("size", item.optLong("size", 0L));
+                status.put("storedName", item.optString("storedName", ""));
+                status.put("chunks", item.optInt("chunks", 1));
+                status.put("received", received);
+                status.put("complete", received.length() >= item.optInt("chunks", 1));
+                statusFiles.put(status);
+            }
+        }
+        out.put("files", statusFiles);
+        return out;
+    }
+
+    private byte[] readRequestBytes(IHTTPSession session) throws IOException {
+        Map<String, String> headers = session.getHeaders();
+        int contentLength = safeInt(headers == null ? null : headers.get("content-length"), 0);
+        if (contentLength <= 0) return new byte[0];
+        InputStream input = session.getInputStream();
+        ByteArrayOutputStream output = new ByteArrayOutputStream(contentLength);
+        byte[] buffer = new byte[Math.min(64 * 1024, Math.max(1024, contentLength))];
+        int remaining = contentLength;
+        while (remaining > 0) {
+            int read = input.read(buffer, 0, Math.min(buffer.length, remaining));
+            if (read <= 0) break;
+            output.write(buffer, 0, read);
+            remaining -= read;
+        }
+        return output.toByteArray();
+    }
+
+    private void emitLocalMediaUpdated(int section, JSONArray files) throws Exception {
+        long syncAt = System.currentTimeMillis();
+        JSONObject timeline = new JSONObject();
+        timeline.put("section", section);
+        timeline.put("cycleId", section + "-local-upload-" + syncAt);
+        timeline.put("syncAt", syncAt);
+        timeline.put("updatedAt", syncAt);
+        timeline.put("fileCount", files == null ? 0 : files.length());
+        timeline.put("mediaSignature", files == null ? "[]" : files.toString());
+        timeline.put("targetDevice", "local");
+
+        JSONObject payload = new JSONObject();
+        payload.put("section", section);
+        payload.put("count", files == null ? 0 : files.length());
+        payload.put("syncAt", syncAt);
+        payload.put("timeline", timeline);
+        EmbeddedCmsRuntime.emitEvent("media-updated", payload);
+    }
+
+    private void emitPlayNow(int section, JSONObject manifest, JSONObject fileMeta, File file) throws Exception {
+        String uploadId = manifest.optString("uploadId", "");
+        String storedName = fileMeta.optString("storedName", "");
+        String baseUrl = EmbeddedCmsRuntime.getPublicUrl(context);
+        if (baseUrl == null || baseUrl.trim().isEmpty()) {
+            baseUrl = EmbeddedCmsRuntime.getLocalUrl();
+        }
+        String streamUrl = baseUrl.replaceAll("/+$", "")
+                + "/media/section"
+                + Math.max(1, Math.min(3, section))
+                + "/"
+                + storedName
+                + "?v="
+                + System.currentTimeMillis();
+
+        JSONObject payload = new JSONObject();
+        payload.put("action", "play_now");
+        payload.put("section", section);
+        payload.put("name", fileMeta.optString("originalName", storedName));
+        payload.put("streamUrl", streamUrl);
+        payload.put("stream_url", streamUrl);
+        if (file != null && file.exists()) {
+            payload.put("localUri", Uri.fromFile(file).toString());
+            payload.put("local_uri", Uri.fromFile(file).toString());
+            payload.put("localPath", file.getAbsolutePath());
+        }
+        payload.put("size", fileMeta.optLong("size", 0L));
+        payload.put("availableBytes", fileMeta.optLong("size", file == null ? 0L : file.length()));
+        payload.put("mtimeMs", System.currentTimeMillis());
+        payload.put("priority", "new-upload-complete");
+        EmbeddedCmsRuntime.emitEvent("play-now", payload);
+    }
+
+    private Response handleChunkInit(IHTTPSession session, int section) throws Exception {
+        JSONObject body = readJsonBody(session);
+        JSONArray files = body.optJSONArray("files");
+        if (files == null || files.length() <= 0) {
+            return withCors(newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json", "{\"success\":false,\"error\":\"files-required\"}"));
+        }
+        int chunkSize = Math.max(1024 * 1024, Math.min(25 * 1024 * 1024, body.optInt("chunkSize", 5 * 1024 * 1024)));
+        String uploadId = safeUploadId(body.optString("uploadId", body.optString("uploadKey", "")));
+        if (uploadId.isEmpty()) uploadId = UUID.randomUUID().toString().replace("-", "");
+        File sessionDir = getChunkSessionDir(section, uploadId);
+        if (!sessionDir.exists() && !sessionDir.mkdirs()) {
+            throw new IOException("Unable to prepare chunk upload directory.");
+        }
+
+        File manifestFile = getChunkManifestFile(sessionDir);
+        JSONObject manifest;
+        if (manifestFile.exists()) {
+            manifest = new JSONObject(readTextFile(manifestFile));
+        } else {
+            clearSectionMedia(section);
+            manifest = new JSONObject();
+            manifest.put("uploadId", uploadId);
+            manifest.put("section", section);
+            manifest.put("chunkSize", chunkSize);
+            manifest.put("containsPpt", "1".equals(body.optString("containsPpt", "")));
+            manifest.put("playNowSent", false);
+            manifest.put("createdAt", System.currentTimeMillis());
+            JSONArray outFiles = new JSONArray();
+            Set<String> names = new HashSet<>();
+            for (int i = 0; i < files.length(); i += 1) {
+                JSONObject input = files.optJSONObject(i);
+                if (input == null) continue;
+                String originalName = input.optString("name", "media.bin");
+                String storedName = uniqueStoredName(sanitizeFileName(originalName), names);
+                if (!isAllowedMedia(storedName)) continue;
+                long size = Math.max(0L, input.optLong("size", 0L));
+                JSONObject item = new JSONObject();
+                item.put("index", i);
+                item.put("originalName", originalName);
+                item.put("storedName", storedName);
+                item.put("size", size);
+                item.put("chunks", Math.max(1L, (size + chunkSize - 1L) / chunkSize));
+                item.put("received", new JSONArray());
+                outFiles.put(item);
+            }
+            manifest.put("files", outFiles);
+            writeTextFile(manifestFile, manifest.toString());
+        }
+
+        return json(chunkStatus(manifest));
+    }
+
+    private Response handleChunkPart(IHTTPSession session, int section, String uri) throws Exception {
+        String[] parts = uri.split("/");
+        String uploadId = parts.length >= 4 ? safeUploadId(parts[3]) : "";
+        int fileIndex = -1;
+        int chunkIndex = -1;
+        for (int i = 0; i < parts.length; i += 1) {
+            if ("file".equals(parts[i]) && i + 1 < parts.length) fileIndex = safeInt(parts[i + 1], -1);
+            if ("part".equals(parts[i]) && i + 1 < parts.length) chunkIndex = safeInt(parts[i + 1], -1);
+        }
+        if (uploadId.isEmpty() || fileIndex < 0 || chunkIndex < 0) {
+            return withCors(newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json", "{\"success\":false,\"error\":\"invalid-chunk-path\"}"));
+        }
+
+        File sessionDir = getChunkSessionDir(section, uploadId);
+        JSONObject manifest = new JSONObject(readTextFile(getChunkManifestFile(sessionDir)));
+        JSONObject fileMeta = findChunkFile(manifest, fileIndex);
+        if (fileMeta == null) {
+            return withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json", "{\"success\":false,\"error\":\"upload-file-not-found\"}"));
+        }
+        int chunkSize = manifest.optInt("chunkSize", 5 * 1024 * 1024);
+        long size = fileMeta.optLong("size", 0L);
+        long offset = (long) chunkIndex * (long) chunkSize;
+        long expected = Math.max(0L, Math.min(size, offset + chunkSize) - offset);
+        byte[] body = readRequestBytes(session);
+        if ((long) body.length != expected) {
+            return withCors(newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json", "{\"success\":false,\"error\":\"chunk-size-mismatch\"}"));
+        }
+
+        synchronized (chunkUploadLock) {
+            manifest = new JSONObject(readTextFile(getChunkManifestFile(sessionDir)));
+            fileMeta = findChunkFile(manifest, fileIndex);
+            if (fileMeta == null) {
+                return withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json", "{\"success\":false,\"error\":\"upload-file-not-found\"}"));
+            }
+            File target = new File(sessionDir, fileMeta.optString("storedName", "media.bin"));
+            RandomAccessFile raf = new RandomAccessFile(target, "rw");
+            try {
+                raf.seek(offset);
+                raf.write(body);
+            } finally {
+                raf.close();
+            }
+
+            JSONArray received = fileMeta.optJSONArray("received");
+            if (received == null) received = new JSONArray();
+            if (!jsonArrayContainsInt(received, chunkIndex)) received.put(chunkIndex);
+            fileMeta.put("received", received);
+            manifest.put("updatedAt", System.currentTimeMillis());
+            writeTextFile(getChunkManifestFile(sessionDir), manifest.toString());
+        }
+
+        JSONObject out = new JSONObject();
+        out.put("success", true);
+        out.put("fileIndex", fileIndex);
+        out.put("chunkIndex", chunkIndex);
+        return json(out);
+    }
+
+    private Response handleChunkComplete(IHTTPSession session, int section, String uploadId) throws Exception {
+        File sessionDir = getChunkSessionDir(section, safeUploadId(uploadId));
+        File manifestFile = getChunkManifestFile(sessionDir);
+        if (!manifestFile.exists()) {
+            return withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json", "{\"success\":false,\"error\":\"upload-session-not-found\"}"));
+        }
+        JSONObject manifest = new JSONObject(readTextFile(manifestFile));
+        JSONArray files = manifest.optJSONArray("files");
+        if (files == null || files.length() <= 0) {
+            return withCors(newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json", "{\"success\":false,\"error\":\"no-valid-files\"}"));
+        }
+        for (int i = 0; i < files.length(); i += 1) {
+            JSONObject item = files.optJSONObject(i);
+            if (item == null) continue;
+            JSONArray received = item.optJSONArray("received");
+            if (received == null || received.length() < item.optInt("chunks", 1)) {
+                JSONObject out = chunkStatus(manifest);
+                out.put("success", false);
+                out.put("error", "upload-incomplete");
+                return withCors(newFixedLengthResponse(Response.Status.CONFLICT, "application/json", out.toString()));
+            }
+            File mediaFile = new File(sessionDir, item.optString("storedName", ""));
+            if (!mediaFile.exists() || mediaFile.length() != item.optLong("size", 0L)) {
+                JSONObject out = chunkStatus(manifest);
+                out.put("success", false);
+                out.put("error", "uploaded-size-mismatch");
+                return withCors(newFixedLengthResponse(Response.Status.CONFLICT, "application/json", out.toString()));
+            }
+        }
+
+        if (manifestFile.exists()) manifestFile.delete();
+        activateIncomingSection(sessionDir, section);
+        emitLocalMediaUpdated(section, files);
+        File activeDir = resolveSectionDirectory(section);
+        for (int i = 0; i < files.length(); i += 1) {
+            JSONObject item = files.optJSONObject(i);
+            if (item != null && isVideoMedia(item.optString("storedName", ""))) {
+                File activeVideo = new File(activeDir, item.optString("storedName", ""));
+                emitPlayNow(section, manifest, item, activeVideo);
+                break;
+            }
+        }
+
+        JSONObject out = new JSONObject();
+        out.put("success", true);
+        out.put("section", section);
+        out.put("count", files.length());
+        return json(out);
+    }
+
     private Response handleClearSectionMedia(IHTTPSession session) throws Exception {
         JSONObject body = readJsonBody(session);
         int section = safeInt(String.valueOf(body.opt("section")), 1);
@@ -815,7 +1168,11 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
     private Response handleAutoReopen(IHTTPSession session) throws Exception {
         JSONObject body = readJsonBody(session);
         boolean enabled = body.optBoolean("enabled", true);
-        getKioskPrefs().edit().putBoolean(KEY_AUTO_REOPEN_ENABLED, enabled).apply();
+        getKioskPrefs()
+                .edit()
+                .putBoolean(KEY_AUTO_REOPEN_ENABLED, enabled)
+                .putBoolean(KEY_AUTO_REOPEN_MANUAL_OFF, !enabled)
+                .apply();
 
         JSONObject payload = new JSONObject();
         payload.put("success", true);
@@ -951,26 +1308,82 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
                 item.put("name", name);
                 item.put("originalName", name);
                 item.put("section", section);
-                item.put("url", "/media/section" + section + "/" + name);
+                item.put("url", "/media/section" + section + "/" + name + "?v=" + file.lastModified());
                 item.put("type", "txt".equals(lowerExt(name)) ? "text" : "media");
                 item.put("size", file.length());
                 item.put("mtimeMs", file.lastModified());
-                item.put("hash", sha1(file));
+                item.put("hash", shouldHashMedia(file) ? sha1(file) : "");
                 array.put(item);
             }
         }
         return array;
     }
 
-    private Response serveMedia(String relativePath) throws Exception {
+    private Response serveMedia(IHTTPSession session, String relativePath) throws Exception {
         File file = resolveMediaFile(relativePath);
         String root = getMediaRoot().getCanonicalPath();
         String target = file.getCanonicalPath();
         if (!target.startsWith(root) || !file.exists() || !file.isFile()) {
             return withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json", "{\"error\":\"not-found\"}"));
         }
-        Response response = newChunkedResponse(Response.Status.OK, guessMime(file.getName()), new FileInputStream(file));
-        response.addHeader("Content-Length", String.valueOf(file.length()));
+        long fileLength = Math.max(0L, file.length());
+        String range = "";
+        try {
+            range = String.valueOf(session.getHeaders().get("range"));
+        } catch (Exception ignored) {
+        }
+        if (range != null && range.toLowerCase(Locale.US).startsWith("bytes=")) {
+            long start = 0L;
+            long end = Math.max(0L, fileLength - 1L);
+            try {
+                String spec = range.substring("bytes=".length()).trim();
+                int dash = spec.indexOf("-");
+                if (dash >= 0) {
+                    String startText = spec.substring(0, dash).trim();
+                    String endText = spec.substring(dash + 1).trim();
+                    if (!startText.isEmpty()) start = Long.parseLong(startText);
+                    if (!endText.isEmpty()) end = Long.parseLong(endText);
+                }
+            } catch (Exception ignored) {
+                start = 0L;
+                end = Math.max(0L, fileLength - 1L);
+            }
+            if (start < 0L) start = 0L;
+            if (target.contains("chunk-upload-section") && start >= fileLength) {
+                long waitUntil = System.currentTimeMillis() + 8000L;
+                while (System.currentTimeMillis() < waitUntil && file.exists() && file.length() <= start) {
+                    try {
+                        Thread.sleep(120L);
+                    } catch (Exception ignored) {
+                        break;
+                    }
+                }
+                fileLength = Math.max(0L, file.length());
+                end = Math.max(0L, fileLength - 1L);
+            }
+            if (end >= fileLength) end = Math.max(0L, fileLength - 1L);
+            if (start > end || start >= fileLength) {
+                Response response = newFixedLengthResponse(Response.Status.RANGE_NOT_SATISFIABLE, "text/plain", "");
+                response.addHeader("Content-Range", "bytes */" + fileLength);
+                response.addHeader("Accept-Ranges", "bytes");
+                return withCors(response);
+            }
+            FileInputStream input = new FileInputStream(file);
+            long skipped = 0L;
+            while (skipped < start) {
+                long step = input.skip(start - skipped);
+                if (step <= 0L) break;
+                skipped += step;
+            }
+            long contentLength = end - start + 1L;
+            Response response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, guessMime(file.getName()), input, contentLength);
+            response.addHeader("Content-Length", String.valueOf(contentLength));
+            response.addHeader("Content-Range", "bytes " + start + "-" + end + "/" + fileLength);
+            response.addHeader("Accept-Ranges", "bytes");
+            return withCors(response);
+        }
+        Response response = newFixedLengthResponse(Response.Status.OK, guessMime(file.getName()), new FileInputStream(file), fileLength);
+        response.addHeader("Content-Length", String.valueOf(fileLength));
         response.addHeader("Accept-Ranges", "bytes");
         return withCors(response);
     }
@@ -1251,19 +1664,11 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
     private void cleanupOldSectionVersions(File versionsDir, String keepVersion) {
         if (versionsDir == null || !versionsDir.exists() || !versionsDir.isDirectory()) return;
         File[] dirs = versionsDir.listFiles(File::isDirectory);
-        if (dirs == null || dirs.length <= 2) return;
+        if (dirs == null || dirs.length <= 1) return;
         Arrays.sort(dirs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
-        int kept = 0;
         for (File dir : dirs) {
             if (dir == null) continue;
-            if (dir.getName().equals(keepVersion)) {
-                kept += 1;
-                continue;
-            }
-            if (kept < 2) {
-                kept += 1;
-                continue;
-            }
+            if (dir.getName().equals(keepVersion)) continue;
             deleteRecursively(dir);
         }
     }
@@ -1297,11 +1702,16 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
         activeState.put("files", files);
         activeState.put("updatedAt", System.currentTimeMillis());
         writeTextFile(activeFile, activeState.toString());
+        deleteRecursively(getSectionBase(section));
         cleanupOldSectionVersions(versionsDir, versionName);
     }
 
     private File resolveMediaFile(String relativePath) {
         String safeRelative = String.valueOf(relativePath == null ? "" : relativePath).trim().replace("\\", "/");
+        int queryIndex = safeRelative.indexOf("?");
+        if (queryIndex >= 0) {
+            safeRelative = safeRelative.substring(0, queryIndex);
+        }
         File direct = new File(getMediaRoot(), safeRelative);
         if (direct.exists() && direct.isFile()) return direct;
 
@@ -1326,9 +1736,23 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
 
     private boolean isAllowedMedia(String name) {
         String lower = String.valueOf(name).toLowerCase(Locale.US);
-        return lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".mkv")
+        return lower.endsWith(".mp4") || lower.endsWith(".m4v") || lower.endsWith(".mov") || lower.endsWith(".mkv")
                 || lower.endsWith(".webm") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")
                 || lower.endsWith(".png") || lower.endsWith(".txt");
+    }
+
+    private boolean isVideoMedia(String name) {
+        String lower = String.valueOf(name).toLowerCase(Locale.US);
+        return lower.endsWith(".mp4") || lower.endsWith(".m4v") || lower.endsWith(".mov") || lower.endsWith(".mkv")
+                || lower.endsWith(".webm");
+    }
+
+    private boolean shouldHashMedia(File file) {
+        try {
+            return file != null && (!isVideoMedia(file.getName()) || file.length() <= MEDIA_HASH_MAX_BYTES);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private String lowerExt(String name) {
@@ -1338,7 +1762,7 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
 
     private String guessMime(String name) {
         String ext = lowerExt(name);
-        if ("mp4".equals(ext)) return "video/mp4";
+        if ("mp4".equals(ext) || "m4v".equals(ext)) return "video/mp4";
         if ("mov".equals(ext)) return "video/quicktime";
         if ("mkv".equals(ext)) return "video/x-matroska";
         if ("webm".equals(ext)) return "video/webm";
@@ -1371,16 +1795,52 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
     }
 
     private void copyFile(File from, File to) throws IOException {
-        InputStream input = new FileInputStream(from);
-        FileOutputStream output = new FileOutputStream(to, false);
-        byte[] buffer = new byte[16 * 1024];
-        int read;
-        while ((read = input.read(buffer)) != -1) {
-          output.write(buffer, 0, read);
+        File parent = to.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Unable to create directory: " + parent.getAbsolutePath());
         }
-        output.flush();
-        input.close();
-        output.close();
+        try (InputStream input = new FileInputStream(from);
+             FileOutputStream output = new FileOutputStream(to, false)) {
+            byte[] buffer = new byte[1024 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+              output.write(buffer, 0, read);
+            }
+            output.flush();
+        }
+    }
+
+    private File uniqueFile(File dir, String fileName) {
+        File candidate = new File(dir, fileName);
+        if (!candidate.exists()) return candidate;
+        String name = fileName;
+        String ext = "";
+        int dot = fileName.lastIndexOf(".");
+        if (dot > 0) {
+            name = fileName.substring(0, dot);
+            ext = fileName.substring(dot);
+        }
+        int count = 2;
+        while (candidate.exists()) {
+            candidate = new File(dir, name + "-" + count + ext);
+            count += 1;
+        }
+        return candidate;
+    }
+
+    private void moveFileFast(File from, File to) throws IOException {
+        File parent = to.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Unable to create directory: " + parent.getAbsolutePath());
+        }
+        if (from.renameTo(to)) return;
+        copyFile(from, to);
+        try {
+            if (!from.delete()) {
+                from.deleteOnExit();
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private void copyDirectory(File from, File to) throws IOException {
@@ -1514,8 +1974,11 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
             long videoMb = Math.round(cache.optDouble("videoMB", 0));
             if (videoMb <= 0) return;
             long bytes = Math.max(64L * 1024 * 1024, videoMb * 1024L * 1024L);
+            long previous = getKioskPrefs().getLong(KEY_VIDEO_CACHE_MAX_BYTES, 0L);
             getKioskPrefs().edit().putLong(KEY_VIDEO_CACHE_MAX_BYTES, bytes).apply();
-            clearVideoCache();
+            if (previous != bytes) {
+                clearVideoCache();
+            }
         } catch (Exception ignored) {
         }
     }

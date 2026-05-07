@@ -1160,6 +1160,18 @@ textarea:focus {
   scroll-margin: 28px;
 }
 
+body.tv-compact-mode button:focus,
+body.tv-compact-mode input:focus,
+body.tv-compact-mode select:focus,
+body.tv-compact-mode textarea:focus,
+body.tv-compact-mode [tabindex]:focus,
+body.tv-compact-mode .btn:focus {
+  outline: 4px solid #ff1f1f;
+  outline-offset: 2px;
+  border-color: #ff1f1f !important;
+  box-shadow: 0 0 0 3px rgba(255, 31, 31, 0.35), 0 0 18px rgba(255, 31, 31, 0.45);
+}
+
 @media (min-width: 900px) and (orientation: landscape) {
   body {
     overflow: hidden;
@@ -1357,8 +1369,8 @@ body.tv-compact-mode .tv-upload-input-look {
 
 body.tv-compact-mode .tv-upload-input-look:focus {
   outline: none;
-  border-color: rgba(37, 180, 255, 0.9);
-  box-shadow: 0 0 0 3px rgba(37, 180, 255, 0.22);
+  border-color: #ff1f1f;
+  box-shadow: 0 0 0 3px rgba(255, 31, 31, 0.35), 0 0 18px rgba(255, 31, 31, 0.45);
 }
 
 body.tv-compact-mode .device-checklist {

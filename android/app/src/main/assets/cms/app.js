@@ -1,5 +1,5 @@
-const SUPPORTED_FILE_EXT = /\.(mp4|mov|mkv|webm|jpg|jpeg|png|txt|pdf|ppt|pptx|pptm|pps|ppsx|potx)$/i;
-const VIDEO_FILE_EXT = /\.(mp4|mov|mkv|webm)$/i;
+const SUPPORTED_FILE_EXT = /\.(mp4|m4v|mov|mkv|webm|jpg|jpeg|png|txt|pdf|ppt|pptx|pptm|pps|ppsx|potx)$/i;
+const VIDEO_FILE_EXT = /\.(mp4|m4v|mov|mkv|webm)$/i;
 const PPT_FILE_EXT = /\.(ppt|pptx|pptm|pps|ppsx|potx)$/i;
 const PPTX_FILE_EXT = /\.(pptx|pptm|ppsx|potx)$/i;
 const PPT_LEGACY_EXT = /\.(ppt|pps)$/i;
@@ -9,13 +9,16 @@ const PPTX_RENDER_DPR = 1;
 const MAX_FILES_PER_UPLOAD = 120;
 const HARD_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
 const WARN_FILE_SIZE_BYTES = 700 * 1024 * 1024;
-const DEFAULT_UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+const DEFAULT_UPLOAD_TIMEOUT_MS = 120 * 60 * 1000;
 const MIN_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
-const MAX_UPLOAD_TIMEOUT_MS = 120 * 60 * 1000;
+const MAX_UPLOAD_TIMEOUT_MS = 360 * 60 * 1000;
 const MULTI_DEVICE_UPLOAD_RETRIES = 2;
 const MULTI_DEVICE_RETRY_DELAY_MS = 1800;
 const MULTI_DEVICE_UPLOAD_CONCURRENCY = 6;
 const UPLOAD_TIMEOUT_STORAGE_KEY = "cmsUploadTimeoutMs";
+const FAST_UPLOAD_SKIP_DUPLICATE_BYTES = 700 * 1024 * 1024;
+const CHUNK_UPLOAD_SIZE_BYTES = 16 * 1024 * 1024;
+const CHUNK_UPLOAD_PARALLEL_PARTS = 4;
 
 const GRID3_LAYOUTS = [
   { id: "stack-v", label: "Stack Vertical" },
@@ -512,6 +515,7 @@ async function probeDeviceOrigin(origin) {
     });
     if (!res.ok) return null;
     const status = await res.json();
+    if (!isTvHostedDeviceStatus(status)) return null;
     return {
       ...status,
       online: status?.online !== false,
@@ -524,6 +528,15 @@ async function probeDeviceOrigin(origin) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isTvHostedDeviceStatus(status) {
+  if (!status || typeof status !== "object") return false;
+  const deviceId = String(status.deviceId || "").trim();
+  const publicUrl = normalizeOrigin(status.publicUrl || "");
+  const localUrl = normalizeOrigin(status.localUrl || "");
+  const port = Number(status.port || 0);
+  return !!deviceId && !!publicUrl && !!localUrl && port > 0;
 }
 
 async function scanSubnetForDevices(force = false) {
@@ -556,6 +569,7 @@ async function scanSubnetForDevices(force = false) {
       Object.values(cmsAccessOverrides || {}).forEach((item) => {
         const candidate = withPreferredPort(item?.origin || "", item?.preferredPort);
         if (!candidate || candidate === selfOrigin || seen.has(candidate)) return;
+        if (!/^https?:\/\/[^/]+:(8080|8081|9090|10080)$/i.test(candidate)) return;
         seen.add(candidate);
         candidates.push(candidate);
       });
@@ -820,6 +834,10 @@ async function postToSelectedDevices(path, body = {}) {
     return await res.json().catch(() => ({ success: true }));
   }));
   return responses;
+}
+
+function isLargeUploadSet(files = []) {
+  return (files || []).some((file) => Number(file?.size || 0) >= FAST_UPLOAD_SKIP_DUPLICATE_BYTES);
 }
 
 function removeActiveMessageDialogs() {
@@ -1227,6 +1245,167 @@ function uploadWithProgress(url, formData, onProgress) {
   });
 }
 
+function buildChunkUploadKey(origin, section, files) {
+  const input = JSON.stringify({
+    origin,
+    section,
+    files: (files || []).map((file) => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified,
+    })),
+  });
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash >>> 0).toString(16);
+}
+
+async function postJsonToOrigin(url, payload) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildCmsAuthHeaders(),
+    },
+    body: JSON.stringify(payload || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(String(data?.error || `Request failed (${res.status})`));
+  }
+  return data;
+}
+
+function uploadChunkToOrigin(url, blob, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.timeout = Math.max(10 * 60 * 1000, getUploadTimeoutMs());
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    const authHeaders = buildCmsAuthHeaders();
+    Object.entries(authHeaders).forEach(([key, value]) => {
+      if (value != null && value !== "") {
+        xhr.setRequestHeader(key, value);
+      }
+    });
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(Number(event.loaded || 0));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.responseText);
+        return;
+      }
+      reject(new Error(parseUploadErrorResponse(xhr.status, xhr.responseText)));
+    };
+    xhr.onerror = () => reject(new Error("Network error during chunk upload"));
+    xhr.ontimeout = () => reject(new Error("Chunk upload timed out"));
+    xhr.send(blob);
+  });
+}
+
+async function uploadFilesWithChunksToOrigin(origin, section, files, containsPpt, onProgress) {
+  const totalBytes = (files || []).reduce((sum, file) => sum + Number(file?.size || 0), 0);
+  const init = await postJsonToOrigin(`${origin}/upload/chunk/init?section=${encodeURIComponent(section)}`, {
+    uploadKey: buildChunkUploadKey(origin, section, files),
+    chunkSize: CHUNK_UPLOAD_SIZE_BYTES,
+    containsPpt: containsPpt ? "1" : "",
+    files: (files || []).map((file) => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified,
+    })),
+  });
+
+  const uploadId = init.uploadId;
+  const chunkSize = Number(init.chunkSize || CHUNK_UPLOAD_SIZE_BYTES);
+  const receivedByFile = new Map(
+    (init.files || []).map((file) => [
+      Number(file.index),
+      new Set((file.received || []).map((value) => Number(value))),
+    ])
+  );
+  let completedBytes = (init.files || []).reduce((sum, file) => {
+    const received = receivedByFile.get(Number(file.index)) || new Set();
+    let done = 0;
+    received.forEach((chunkIndex) => {
+      const start = chunkIndex * chunkSize;
+      const end = Math.min(Number(file.size || 0), start + chunkSize);
+      done += Math.max(0, end - start);
+    });
+    return sum + done;
+  }, 0);
+  const activeChunkBytes = new Map();
+  const emitAggregateProgress = () => {
+    const activeBytes = Array.from(activeChunkBytes.values()).reduce(
+      (sum, value) => sum + Number(value || 0),
+      0
+    );
+    onProgress(totalBytes ? ((completedBytes + activeBytes) / totalBytes) * 100 : 0);
+  };
+  emitAggregateProgress();
+
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+    const file = files[fileIndex];
+    const chunks = Math.max(1, Math.ceil(Number(file.size || 0) / chunkSize));
+    const received = receivedByFile.get(fileIndex) || new Set();
+    const pendingChunks = [];
+    for (let chunkIndex = 0; chunkIndex < chunks; chunkIndex += 1) {
+      if (!received.has(chunkIndex)) pendingChunks.push(chunkIndex);
+    }
+
+    let cursor = 0;
+    async function uploadWorker() {
+      while (cursor < pendingChunks.length) {
+        const chunkIndex = pendingChunks[cursor];
+        cursor += 1;
+      const start = chunkIndex * chunkSize;
+      const end = Math.min(Number(file.size || 0), start + chunkSize);
+      const blob = file.slice(start, end);
+      let uploaded = false;
+      for (let attempt = 0; attempt < 4 && !uploaded; attempt += 1) {
+        try {
+          const progressKey = `${fileIndex}:${chunkIndex}`;
+          await uploadChunkToOrigin(
+            `${origin}/upload/chunk/${encodeURIComponent(uploadId)}/file/${fileIndex}/part/${chunkIndex}?section=${encodeURIComponent(section)}`,
+            blob,
+            (loaded) => {
+              activeChunkBytes.set(progressKey, Math.max(0, Math.min(blob.size, Number(loaded || 0))));
+              emitAggregateProgress();
+            }
+          );
+          activeChunkBytes.delete(progressKey);
+          completedBytes += blob.size;
+          emitAggregateProgress();
+          uploaded = true;
+        } catch (error) {
+          activeChunkBytes.delete(`${fileIndex}:${chunkIndex}`);
+          emitAggregateProgress();
+          if (attempt >= 3) throw error;
+          await wait(1200 * (attempt + 1));
+        }
+      }
+    }
+    }
+
+    const workerCount = Math.max(
+      1,
+      Math.min(CHUNK_UPLOAD_PARALLEL_PARTS, pendingChunks.length || 1)
+    );
+    await Promise.all(Array.from({ length: workerCount }, () => uploadWorker()));
+  }
+
+  await postJsonToOrigin(`${origin}/upload/chunk/${encodeURIComponent(uploadId)}/complete?section=${encodeURIComponent(section)}`, {
+    containsPpt: containsPpt ? "1" : "",
+  });
+}
+
 function createAggregateProgressTracker(totalTargets, section) {
   const safeTotal = Math.max(1, Number(totalTargets || 1));
   const perTarget = Array.from({ length: safeTotal }, () => 0);
@@ -1325,22 +1504,42 @@ async function verifyUploadedFilesAcrossSelectedOrigins(targets, section, upload
   return results;
 }
 
-async function uploadToOriginWithRetry(origin, section, buildFormData, tracker, targetIndex) {
+async function uploadToOriginWithRetry(origin, section, uploadFiles, containsPpt, tracker, targetIndex, options = {}) {
   let lastError = null;
-  for (let attempt = 0; attempt <= MULTI_DEVICE_UPLOAD_RETRIES; attempt += 1) {
+  const maxRetries = Math.max(0, Number(options.maxRetries ?? MULTI_DEVICE_UPLOAD_RETRIES));
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
       if (attempt > 0) {
         tracker.markRetry(targetIndex, attempt);
       }
-      const formData = buildFormData();
-      await uploadWithProgress(`${origin}/upload?section=${encodeURIComponent(section)}`, formData, (percent) => {
-        tracker.setProgress(targetIndex, percent);
-      });
+      try {
+        await uploadFilesWithChunksToOrigin(origin, section, uploadFiles, containsPpt, (percent) => {
+          tracker.setProgress(targetIndex, percent);
+        });
+      } catch (chunkError) {
+        if (!/not found|endpoint not found|404/i.test(String(chunkError?.message || ""))) {
+          throw chunkError;
+        }
+        const formData = cloneUploadFormData(uploadFiles, containsPpt);
+        await uploadWithProgress(`${origin}/upload?section=${encodeURIComponent(section)}`, formData, (percent) => {
+          tracker.setProgress(targetIndex, percent);
+        });
+      }
       tracker.markComplete(targetIndex);
       return;
     } catch (error) {
       lastError = error;
-      if (attempt < MULTI_DEVICE_UPLOAD_RETRIES) {
+      if (typeof options.verifyBeforeRetry === "function") {
+        try {
+          const verified = await options.verifyBeforeRetry(error, attempt);
+          if (verified) {
+            tracker.setState(targetIndex, "done", "Upload complete (verified)", 100);
+            return { recovered: true };
+          }
+        } catch (_verifyError) {
+        }
+      }
+      if (attempt < maxRetries) {
         await wait(MULTI_DEVICE_RETRY_DELAY_MS * (attempt + 1));
         continue;
       }
@@ -1369,7 +1568,7 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function verifyUploadedFilesOnOrigin(origin, section, uploadFiles, retries = 8, delayMs = 2500) {
+async function verifyUploadedFilesOnOrigin(origin, section, uploadFiles, retries = 20, delayMs = 3000) {
   const expectedNames = uploadFiles
     .map((file) => String(file?.name || "").trim().toLowerCase())
     .filter(Boolean);
@@ -2378,7 +2577,7 @@ function renderSectionSlot(slot, sectionNumber, config) {
   }
 
   const file = liveFile || files[state.index % files.length];
-  const isVideo = /\.(mp4|mov|mkv|webm)$/i.test(file.name || "");
+  const isVideo = /\.(mp4|m4v|mov|mkv|webm)$/i.test(file.name || "");
   const isText = (file.type || "").toLowerCase() === "text" || /\.txt$/i.test(file.originalName || file.name || "");
   const isPdf = (file.type || "").toLowerCase() === "pdf" || /\.pdf$/i.test(file.originalName || file.name || "");
 
@@ -3373,19 +3572,6 @@ async function loadDevices(options = {}) {
     currentDeviceMap = new Map();
   }
   upsertDiscoveredDevices(normalizedDevices);
-  Object.entries(cmsAccessOverrides || {}).forEach(([deviceId, override]) => {
-    const origin = withPreferredPort(override?.origin || "", override?.preferredPort);
-    if (!origin || currentDeviceMap.has(origin)) return;
-    currentDeviceMap.set(origin, {
-      name: deviceId,
-      deviceId,
-      origin,
-      publicUrl: origin,
-      localUrl: origin,
-      accessOverride: override,
-      online: false,
-    });
-  });
   rebuildHiddenDeviceSelectOptions();
 
   const nextSelected = Array.from(previousSelected).filter((value) => currentDeviceMap.has(value));
@@ -3531,7 +3717,10 @@ async function uploadMedia(section) {
       `Preparing ${uploadFiles.length} file(s), ${formatBytes(totalSize)} for ${deviceOrigins.length} device${deviceOrigins.length === 1 ? "" : "s"}`
     );
 
-    const duplicateOrigins = await detectDuplicateUploadTargets(targetDevices, section, uploadFiles);
+    const skipDuplicateScan = isLargeUploadSet(uploadFiles);
+    const duplicateOrigins = skipDuplicateScan
+      ? new Set()
+      : await detectDuplicateUploadTargets(targetDevices, section, uploadFiles);
     const tracker = createAggregateProgressTracker(allSelectedTargets.length, section);
     const successfulTargets = [];
     const failedTargets = [];
@@ -3554,7 +3743,13 @@ async function uploadMedia(section) {
     const queuedTargets = allSelectedTargets
       .map((target, idx) => ({ ...target, index: idx }))
       .filter((target) => target.online !== false && !duplicateOrigins.has(target.origin));
-    const uploadConcurrency = Math.max(1, Math.min(MULTI_DEVICE_UPLOAD_CONCURRENCY, queuedTargets.length || 1));
+    const hasVeryLargeVideo = uploadFiles.some(
+      (file) => VIDEO_FILE_EXT.test(file?.name || "") && Number(file?.size || 0) > WARN_FILE_SIZE_BYTES
+    );
+    const isLargeUpload = isLargeUploadSet(uploadFiles);
+    const uploadConcurrency = hasVeryLargeVideo
+      ? 1
+      : Math.max(1, Math.min(MULTI_DEVICE_UPLOAD_CONCURRENCY, queuedTargets.length || 1));
 
     await runUploadsInParallel(queuedTargets, uploadConcurrency, async (target, queueIndex, laneIndex) => {
       tracker.setState(
@@ -3564,17 +3759,33 @@ async function uploadMedia(section) {
         0
       );
       try {
-        await uploadToOriginWithRetry(
+        const result = await uploadToOriginWithRetry(
           target.origin,
           section,
-          () => cloneUploadFormData(uploadFiles, containsPpt),
+          uploadFiles,
+          containsPpt,
           tracker,
-          target.index
+          target.index,
+          {
+            maxRetries: MULTI_DEVICE_UPLOAD_RETRIES,
+            verifyBeforeRetry: isLargeUpload
+              ? async (_error, attempt) => {
+                  updateUploadProgress(
+                    Math.max(92, Math.min(99, Math.round(((queueIndex + 1) / Math.max(queuedTargets.length, 1)) * 100))),
+                    `Checking ${target.label} before retry ${attempt + 1}...`
+                  );
+                  return verifyUploadedFilesOnOrigin(target.origin, section, uploadFiles, 8, 2500);
+                }
+              : null,
+          }
         );
         successfulTargets.push(target);
+        if (result?.recovered) recoveredTargets.push(target);
       } catch (error) {
         const rawMessage = String(error?.message || "Upload failed");
-        const shouldVerify = /network error during upload|upload timed out/i.test(rawMessage);
+        const shouldVerify =
+          /network error during upload|upload timed out|server error|server-error|failed to fetch|connection/i.test(rawMessage) ||
+          isLargeUpload;
         let recovered = false;
         if (shouldVerify) {
           updateUploadProgress(
@@ -3594,12 +3805,15 @@ async function uploadMedia(section) {
       }
     });
 
-    if (successfulTargets.length) {
-      await loadPreviewMediaSection(primaryOrigin, section);
-      renderScreenPreview();
-    }
-
     tracker.finish(`Upload finished. ${successfulTargets.length}/${queuedTargets.length} devices updated.`);
+    if (successfulTargets.length) {
+      Promise.race([
+        loadPreviewMediaSection(primaryOrigin, section),
+        wait(2500),
+      ])
+        .then(() => renderScreenPreview())
+        .catch(() => {});
+    }
     const summaryParts = [
       successfulTargets.length
         ? `${successfulTargets.length} device${successfulTargets.length === 1 ? "" : "s"} updated with new media.`
@@ -3682,7 +3896,6 @@ async function loadConfig() {
     grid3Layout: selectedGrid3Layout,
     gridRatio: selectedGridRatio,
   };
-  await loadPreviewMedia(targetDevice);
   updateGridRatioOptions();
   renderGrid3LayoutOptions();
   renderUploadSections();
@@ -3695,6 +3908,9 @@ async function loadConfig() {
     updateSectionUploadMode(i);
   }
   updateSectionVisibility();
+  loadPreviewMedia(targetDevice)
+    .then(() => renderScreenPreview())
+    .catch(() => {});
 }
 
 async function saveConfig() {
@@ -3749,7 +3965,7 @@ async function saveConfig() {
     }
 
     updateUploadProgress(92, "Applying settings instantly on selected TVs...");
-    await clearUnusedSectionsForLayout(targetDevices, config.layout || "fullscreen");
+    clearUnusedSectionsForLayout(targetDevices, config.layout || "fullscreen").catch(() => {});
     updateUploadProgress(100, "Configuration applied successfully.");
     showNotice("success", "Settings Saved", "Configuration has been applied successfully.", 2200);
     if (window.ReactNativeWebView) {

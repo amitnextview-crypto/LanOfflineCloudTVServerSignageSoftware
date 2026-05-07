@@ -47,6 +47,7 @@ import { PlaybackController } from "../services/playbackController";
 import { findCMS, getServer, restoreServerFromStorage } from "../services/serverService";
 import { SourceManager, type SourceSnapshot } from "../services/sourceManager";
 import {
+  clearUsbPlaybackCache,
   getUsbStateForPlayback,
   warmUsbPlaybackCache,
 } from "../services/usbPlaybackCacheService";
@@ -74,7 +75,7 @@ const AUTO_CLEAR_BOOT_MARKER_KEY = "auto_clear_boot_marker_v1";
 const AUTO_CLEAR_BOOT_LOOP_GUARD_MS = 20000;
 const ENABLE_AUTO_CLEAR_ON_BOOT = false;
 const INIT_RETRY_DELAY_MS = 5000;
-const MEDIA_UPDATE_DEBOUNCE_MS = 800;
+const MEDIA_UPDATE_DEBOUNCE_MS = 120;
 const LICENSE_INIT_RETRY_COUNT = 5;
 const LICENSE_INIT_RETRY_DELAY_MS = 1200;
 const APK_UPDATE_PENDING_KEY = "apk_update_pending_v1";
@@ -156,6 +157,16 @@ async function getPathSizeSafe(targetPath: string): Promise<number> {
     return sizes.reduce((sum: number, size: number) => sum + Number(size || 0), 0);
   } catch {
     return 0;
+  }
+}
+
+async function unlinkPathIfExists(targetPath: string) {
+  try {
+    if (targetPath && (await RNFS.exists(targetPath))) {
+      await RNFS.unlink(targetPath);
+    }
+  } catch {
+    // ignore cleanup errors
   }
 }
 
@@ -362,8 +373,7 @@ export default function App() {
     const applyUsbState = async (incomingState?: any) => {
       try {
         const permissionGranted = await ensureUsbMediaReadPermissions();
-        console.log("[USB_PERM]", permissionGranted ? "granted" : "denied");
-        if (!permissionGranted) return;
+        console.log("[USB_PERM]", permissionGranted ? "granted" : "denied-scan-anyway");
         const state = incomingState || (await refreshUsbState());
         const playbackState = await getUsbStateForPlayback(state);
         console.log("[USB_REFRESH]", JSON.stringify(playbackState));
@@ -462,7 +472,16 @@ export default function App() {
     }
   }
 
+  function clearNativeVideoCache() {
+    try {
+      (NativeModules as any)?.DeviceIdModule?.clearVideoCache?.();
+    } catch {
+      // ignore native cache cleanup errors
+    }
+  }
+
   async function clearRuntimeCacheOnly() {
+    clearNativeVideoCache();
     const mediaPath = `${RNFS.DocumentDirectoryPath}/media`;
     const cachePath = RNFS.CachesDirectoryPath;
     if (await RNFS.exists(mediaPath)) {
@@ -535,7 +554,9 @@ export default function App() {
   }
 
   async function clearRuntimeDeepData() {
+    clearNativeVideoCache();
     await resetMediaRuntimeState({ clearListCache: true });
+    await clearUsbPlaybackCache();
     await clearPersistedPlaybackState();
     resetRuntimePlaybackSnapshots();
     setSectionPlaybackTimeline({});
@@ -555,20 +576,18 @@ export default function App() {
       // ignore AsyncStorage cleanup errors
     }
 
-    await clearRuntimePlaybackData();
-    await clearRuntimeTransientCache();
-    try {
-      const manifestPath = `${RNFS.DocumentDirectoryPath}/media/manifest.json`;
-      const listPath = `${RNFS.DocumentDirectoryPath}/media/list-cache.json`;
-      if (await RNFS.exists(manifestPath)) {
-        await RNFS.unlink(manifestPath);
-      }
-      if (await RNFS.exists(listPath)) {
-        await RNFS.unlink(listPath);
-      }
-    } catch {
-      // ignore cleanup errors
-    }
+    await Promise.allSettled([
+      clearRuntimePlaybackData(),
+      clearRuntimeTransientCache(),
+      unlinkPathIfExists(`${RNFS.DocumentDirectoryPath}/media`),
+      unlinkPathIfExists(`${RNFS.DocumentDirectoryPath}/usb-cache`),
+      unlinkPathIfExists(`${RNFS.DocumentDirectoryPath}/config.json`),
+      unlinkPathIfExists(`${RNFS.DocumentDirectoryPath}/manifest.json`),
+      unlinkPathIfExists(`${RNFS.DocumentDirectoryPath}/list-cache.json`),
+      unlinkPathIfExists(RNFS.CachesDirectoryPath),
+      unlinkPathIfExists((RNFS as any).TemporaryDirectoryPath || ""),
+      unlinkPathIfExists((RNFS as any).ExternalCachesDirectoryPath || ""),
+    ]);
 
     try {
       await clearEmbeddedCmsState();
@@ -828,9 +847,40 @@ export default function App() {
         }
         if (type === "media-updated") {
           sourceManagerRef.current.onCmsUpdate();
+          playbackControllerRef.current.stopInstantStream();
           const section = Number(payload?.section || 0);
+          if (section && payload?.timeline) {
+            mergePlaybackTimeline(section, payload.timeline);
+          }
           await refreshPlayerMediaImmediately(section);
           void finalizePlayerMediaRefresh(section);
+          return;
+        }
+        if (type === "play-now") {
+          sourceManagerRef.current.onCmsUpdate();
+          const section = Number(payload?.section || 1);
+          const streamUrl = String(payload?.streamUrl || payload?.stream_url || "").trim();
+          const localUri = String(payload?.localUri || payload?.local_uri || "").trim();
+          const playbackUri = localUri || streamUrl;
+          if (!playbackUri) return;
+          if (!localUri) {
+            void clearRuntimeCacheOnly();
+          }
+          setPrioritySection(section);
+          playbackControllerRef.current.playInstantStream({
+            name: String(payload?.name || "streaming-upload.mp4"),
+            originalName: String(payload?.name || "streaming-upload.mp4"),
+            section: 1,
+            url: streamUrl || playbackUri,
+            remoteUrl: playbackUri,
+            localPath: String(payload?.localPath || ""),
+            type: "media",
+            size: Number(payload?.size || 0),
+            mtimeMs: Number(payload?.mtimeMs || Date.now()),
+          });
+          setContentResetVersion((prev) => prev + 1);
+          setPlaylistSyncAt(Date.now());
+          bumpSectionMediaVersion(section);
           return;
         }
         if (type === "device-command") {

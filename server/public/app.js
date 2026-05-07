@@ -7,9 +7,10 @@ const PPTX_CANVAS_WIDTH = 1920;
 const PPTX_CANVAS_HEIGHT = 1080;
 const PPTX_RENDER_DPR = 1;
 const MAX_FILES_PER_UPLOAD = 120;
-const HARD_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
+const HARD_FILE_SIZE_BYTES = 50 * 1024 * 1024 * 1024;
 const WARN_FILE_SIZE_BYTES = 700 * 1024 * 1024;
-const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+const UPLOAD_TIMEOUT_MS = 120 * 60 * 1000;
+const CHUNK_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024;
 
 const GRID3_LAYOUTS = [
   { id: "stack-v", label: "Stack Vertical" },
@@ -380,6 +381,138 @@ function uploadWithProgress(url, formData, onProgress) {
     xhr.onerror = () => reject(new Error("Network error during upload"));
     xhr.ontimeout = () => reject(new Error("Upload timed out while waiting for server response"));
     xhr.send(formData);
+  });
+}
+
+function hashUploadKey(deviceId, section, files) {
+  const input = JSON.stringify({
+    deviceId,
+    section,
+    files: files.map((file) => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified,
+    })),
+  });
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash >>> 0).toString(16);
+}
+
+function postJson(url, payload) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+    credentials: "same-origin",
+  }).then(async (res) => {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(String(data?.error || `Request failed (${res.status})`));
+    }
+    return data;
+  });
+}
+
+function uploadChunkWithProgress(url, blob, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.timeout = 10 * 60 * 1000;
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(event.loaded);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.responseText);
+        return;
+      }
+      reject(new Error(parseUploadErrorResponse(xhr.status, xhr.responseText)));
+    };
+    xhr.onerror = () => reject(new Error("Network error during chunk upload"));
+    xhr.ontimeout = () => reject(new Error("Chunk upload timed out"));
+    xhr.send(blob);
+  });
+}
+
+async function uploadFilesInChunks(deviceId, section, uploadFiles, options = {}, onProgress = () => {}) {
+  const totalBytes = uploadFiles.reduce((sum, file) => sum + Number(file?.size || 0), 0);
+  const uploadKey = hashUploadKey(deviceId, section, uploadFiles);
+  const init = await postJson(`/upload/${deviceId}/section/${section}/chunk/init`, {
+    uploadKey,
+    chunkSize: CHUNK_UPLOAD_SIZE_BYTES,
+    containsPpt: options.containsPpt ? "1" : "",
+    files: uploadFiles.map((file) => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified,
+    })),
+  });
+
+  const uploadId = init.uploadId;
+  const receivedByFile = new Map(
+    (init.files || []).map((file) => [
+      Number(file.index),
+      new Set((file.received || []).map((value) => Number(value))),
+    ])
+  );
+  let completedBytes = (init.files || []).reduce((sum, file) => {
+    const chunks = receivedByFile.get(Number(file.index)) || new Set();
+    let fileDone = 0;
+    chunks.forEach((chunkIndex) => {
+      const start = chunkIndex * Number(init.chunkSize || CHUNK_UPLOAD_SIZE_BYTES);
+      const end = Math.min(Number(file.size || 0), start + Number(init.chunkSize || CHUNK_UPLOAD_SIZE_BYTES));
+      fileDone += Math.max(0, end - start);
+    });
+    return sum + fileDone;
+  }, 0);
+
+  onProgress(totalBytes ? (completedBytes / totalBytes) * 100 : 0);
+
+  for (let fileIndex = 0; fileIndex < uploadFiles.length; fileIndex += 1) {
+    const file = uploadFiles[fileIndex];
+    const chunkSize = Number(init.chunkSize || CHUNK_UPLOAD_SIZE_BYTES);
+    const chunks = Math.max(1, Math.ceil(Number(file.size || 0) / chunkSize));
+    const received = receivedByFile.get(fileIndex) || new Set();
+
+    for (let chunkIndex = 0; chunkIndex < chunks; chunkIndex += 1) {
+      if (received.has(chunkIndex)) continue;
+      const start = chunkIndex * chunkSize;
+      const end = Math.min(Number(file.size || 0), start + chunkSize);
+      const blob = file.slice(start, end);
+      let lastLoaded = 0;
+      let uploaded = false;
+      for (let attempt = 0; attempt < 4 && !uploaded; attempt += 1) {
+        try {
+          await uploadChunkWithProgress(
+            `/upload/${deviceId}/section/${section}/chunk/${uploadId}/file/${fileIndex}/part/${chunkIndex}`,
+            blob,
+            (loaded) => {
+              lastLoaded = Number(loaded || 0);
+              onProgress(totalBytes ? ((completedBytes + lastLoaded) / totalBytes) * 100 : 0);
+            }
+          );
+          completedBytes += blob.size;
+          onProgress(totalBytes ? (completedBytes / totalBytes) * 100 : 100);
+          uploaded = true;
+        } catch (error) {
+          lastLoaded = 0;
+          if (attempt >= 3) throw error;
+          await wait(1200 * (attempt + 1));
+        }
+      }
+    }
+  }
+
+  await postJson(`/upload/${deviceId}/section/${section}/chunk/${uploadId}/complete`, {
+    containsPpt: options.containsPpt ? "1" : "",
   });
 }
 
@@ -2274,22 +2407,20 @@ async function uploadMedia(section) {
       }
     }
 
-    const formData = new FormData();
-    if (containsPpt) {
-      formData.append("containsPpt", "1");
-    }
-    for (const file of uploadFiles) {
-      formData.append("files", file);
-    }
-
     updateUploadProgress(
       0,
-      `Uploading ${uploadFiles.length} file(s), ${formatBytes(totalSize)}`
+      `Uploading ${uploadFiles.length} file(s) in 5MB chunks, ${formatBytes(totalSize)}`
     );
 
-    await uploadWithProgress(`/upload/${deviceId}/section/${section}`, formData, (percent) => {
-      updateUploadProgress(percent, "Uploading media...");
-    });
+    await uploadFilesInChunks(
+      deviceId,
+      section,
+      uploadFiles,
+      { containsPpt },
+      (percent) => {
+        updateUploadProgress(percent, "Uploading media chunks...");
+      }
+    );
 
     await loadPreviewMedia(deviceId);
     renderScreenPreview();

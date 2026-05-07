@@ -58,6 +58,7 @@ import org.json.JSONArray;
 public class DeviceIdModule extends ReactContextBaseJavaModule implements ActivityEventListener {
     private static final String PREFS_NAME = "kiosk_prefs";
     private static final String KEY_AUTO_REOPEN_ENABLED = "auto_reopen_enabled";
+    private static final String KEY_AUTO_REOPEN_MANUAL_OFF = "auto_reopen_manual_off";
     private static final String KEY_VIDEO_CACHE_MAX_BYTES = "video_cache_max_bytes";
     private static final int MAIN_REOPEN_REQ_CODE = 7201;
     private static final int SERVICE_REOPEN_REQ_CODE = 7202;
@@ -206,7 +207,8 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
         android.content.SharedPreferences.Editor editor = context
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
-                .putBoolean(KEY_AUTO_REOPEN_ENABLED, enabled);
+                .putBoolean(KEY_AUTO_REOPEN_ENABLED, enabled)
+                .putBoolean(KEY_AUTO_REOPEN_MANUAL_OFF, !enabled);
         editor.commit();
 
         if (!enabled) {
@@ -439,16 +441,20 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
                 android.content.SharedPreferences kioskPrefs =
                         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
                 boolean preservedAutoReopen = kioskPrefs.getBoolean(KEY_AUTO_REOPEN_ENABLED, true);
+                boolean preservedManualOff = kioskPrefs.getBoolean(KEY_AUTO_REOPEN_MANUAL_OFF, false);
                 long preservedVideoCacheMaxBytes = kioskPrefs.getLong(KEY_VIDEO_CACHE_MAX_BYTES, 0L);
                 kioskPrefs
                         .edit()
                         .clear()
                         .putBoolean(KEY_AUTO_REOPEN_ENABLED, preservedAutoReopen)
+                        .putBoolean(KEY_AUTO_REOPEN_MANUAL_OFF, preservedManualOff)
                         .putLong(KEY_VIDEO_CACHE_MAX_BYTES, preservedVideoCacheMaxBytes)
                         .apply();
             } catch (Exception ignored) {
             }
             try {
+                deleteRecursively(new File(context.getFilesDir(), "media"));
+                deleteRecursively(new File(context.getFilesDir(), "usb-cache"));
                 File mediaRoot = new File(context.getFilesDir(), "cms-media");
                 deleteRecursively(mediaRoot);
             } catch (Exception ignored) {
@@ -460,6 +466,15 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
             }
             try {
                 NativeVideoPlayerView.clearVideoCache(context);
+            } catch (Exception ignored) {
+            }
+            try {
+                File[] cacheChildren = context.getCacheDir().listFiles();
+                if (cacheChildren != null) {
+                    for (File child : cacheChildren) {
+                        if (child != null) deleteRecursively(child);
+                    }
+                }
             } catch (Exception ignored) {
             }
             promise.resolve(true);
@@ -1249,7 +1264,7 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
 
     private String resolveMimeType(String fileName) {
         String lower = String.valueOf(fileName == null ? "" : fileName).toLowerCase(Locale.US);
-        if (lower.endsWith(".mp4")) return "video/mp4";
+        if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) return "video/mp4";
         if (lower.endsWith(".mov")) return "video/quicktime";
         if (lower.endsWith(".mkv")) return "video/x-matroska";
         if (lower.endsWith(".webm")) return "video/webm";
@@ -1333,7 +1348,7 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
 
     private boolean isAllowedMedia(String name) {
         String lower = String.valueOf(name == null ? "" : name).toLowerCase(Locale.US);
-        return lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".mkv")
+        return lower.endsWith(".mp4") || lower.endsWith(".m4v") || lower.endsWith(".mov") || lower.endsWith(".mkv")
                 || lower.endsWith(".webm") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")
                 || lower.endsWith(".png") || lower.endsWith(".txt") || lower.endsWith(".pdf")
                 || lower.endsWith(".ppt") || lower.endsWith(".pptx") || lower.endsWith(".pptm")

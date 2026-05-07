@@ -132,7 +132,8 @@ export function getMediaCacheIdentity(item: any) {
 }
 
 export function shouldPreferStreamingForVideo(item: any, server: string) {
-  return !!server && isVideoFile(item);
+  const localUri = normalizeMediaUri(String(item?.remoteUrl || ""));
+  return !!server && isVideoFile(item) && !isLocalPlayableUri(localUri);
 }
 
 export function buildListSignature(list: any[]) {
@@ -140,7 +141,7 @@ export function buildListSignature(list: any[]) {
   let hash = 0;
   const parts: string[] = [];
   for (const item of list) {
-    const part = getMediaStableIdentity(item);
+    const part = getMediaContentIdentity(item);
     parts.push(part);
     for (let i = 0; i < part.length; i += 1) {
       hash = (hash * 33 + part.charCodeAt(i)) | 0;
@@ -154,7 +155,7 @@ export function areMediaListsEqual(a: any[], b: any[]) {
   if (!Array.isArray(a) || !Array.isArray(b)) return false;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
-    if (getMediaStableIdentity(a[i]) !== getMediaStableIdentity(b[i])) {
+    if (getMediaContentIdentity(a[i]) !== getMediaContentIdentity(b[i])) {
       return false;
     }
     if (getMediaCacheIdentity(a[i]) !== getMediaCacheIdentity(b[i])) {

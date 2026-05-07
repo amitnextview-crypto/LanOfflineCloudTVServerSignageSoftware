@@ -25,6 +25,9 @@ import android.content.pm.PackageManager;
 import android.util.Log;
 
 public class BootReceiver extends BroadcastReceiver {
+    private static final String PREFS_NAME = "kiosk_prefs";
+    private static final String KEY_AUTO_REOPEN_ENABLED = "auto_reopen_enabled";
+    private static final String KEY_AUTO_REOPEN_MANUAL_OFF = "auto_reopen_manual_off";
     private static final String ACTION_LOCKED_BOOT_COMPLETED = "android.intent.action.LOCKED_BOOT_COMPLETED";
     private static final String ACTION_QUICKBOOT_POWERON = "android.intent.action.QUICKBOOT_POWERON";
 
@@ -38,6 +41,11 @@ public class BootReceiver extends BroadcastReceiver {
             || ACTION_QUICKBOOT_POWERON.equals(action)) {
 
             Log.d("BOOT", "Boot/package restart trigger received");
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(KEY_AUTO_REOPEN_ENABLED, true)
+                    .putBoolean(KEY_AUTO_REOPEN_MANUAL_OFF, false)
+                    .apply();
 
             Intent serviceIntent = new Intent(context, KioskKeepAliveService.class);
             try {
@@ -73,4 +81,5 @@ public class BootReceiver extends BroadcastReceiver {
             context.startActivity(launchIntent);
         }
     }
+
 }

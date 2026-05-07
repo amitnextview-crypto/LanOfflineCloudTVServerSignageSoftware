@@ -370,7 +370,7 @@ export default function PlayerScreen({
     const fallbackMode = config?.schedule?.fallbackMode || "black";
     const fallbackBgColor = config?.schedule?.fallbackBgColor || "#000000";
     const fallbackMediaUrl = config?.schedule?.fallbackImageUrl || "";
-    const isFallbackVideo = /\.(mp4|mov|mkv|webm)(\?.*)?$/i.test(fallbackMediaUrl);
+    const isFallbackVideo = /\.(mp4|m4v|mov|mkv|webm)(\?.*)?$/i.test(fallbackMediaUrl);
 
     if (fallbackMode === "image" && fallbackMediaUrl) {
       if (isFallbackVideo) {

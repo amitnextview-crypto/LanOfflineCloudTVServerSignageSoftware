@@ -25,6 +25,7 @@ class MainActivity : ReactActivity() {
     private const val REOPEN_REQ_CODE = 7201
     private const val PREFS_NAME = "kiosk_prefs"
     private const val KEY_AUTO_REOPEN_ENABLED = "auto_reopen_enabled"
+    private const val KEY_AUTO_REOPEN_MANUAL_OFF = "auto_reopen_manual_off"
     private const val EXTRA_SKIP_AUTO_REOPEN_RESTORE_ONCE = "skip_auto_reopen_restore_once"
   }
 
@@ -225,13 +226,17 @@ override fun onWindowFocusChanged(hasFocus: Boolean) {
   }
 
   private fun setAutoReopenEnabled(enabled: Boolean) {
-    getPrefs().edit().putBoolean(KEY_AUTO_REOPEN_ENABLED, enabled).apply()
+    getPrefs().edit()
+      .putBoolean(KEY_AUTO_REOPEN_ENABLED, enabled)
+      .putBoolean(KEY_AUTO_REOPEN_MANUAL_OFF, !enabled)
+      .apply()
   }
 
   private fun clearSignageDataAndRestart() {
     try {
       getPrefs().edit()
         .putBoolean(KEY_AUTO_REOPEN_ENABLED, false)
+        .putBoolean(KEY_AUTO_REOPEN_MANUAL_OFF, true)
         .apply()
       cancelScheduledReopen()
 
@@ -244,13 +249,7 @@ override fun onWindowFocusChanged(hasFocus: Boolean) {
       // Continue to restart even if partial cleanup fails.
     }
 
-    Toast.makeText(this, "Data cleared, restarting...", Toast.LENGTH_SHORT).show()
-    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-    launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-    launchIntent?.putExtra(EXTRA_SKIP_AUTO_REOPEN_RESTORE_ONCE, true)
-    if (launchIntent != null) {
-      startActivity(launchIntent)
-      finishAffinity()
-    }
+    Toast.makeText(this, "Data cleared, reopen disabled", Toast.LENGTH_SHORT).show()
+    finishAffinity()
   }
 }

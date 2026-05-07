@@ -14,6 +14,7 @@ const MEDIA_FETCH_BACKOFF_MAX_MS = 30000;
 const DOWNLOAD_CONCURRENCY = 6;
 const LARGE_MEDIA_BYTES = 300 * 1024 * 1024;
 const LARGE_MEDIA_CONCURRENCY = 2;
+const LARGE_VIDEO_CACHE_DEFER_MS = 0;
 const LIST_REFRESH_MIN_INTERVAL_MS = 3000;
 const SMALL_FILE_AWAIT_BYTES = 5 * 1024 * 1024;
 const DOWNLOAD_MAX_RETRIES = 5;
@@ -384,6 +385,9 @@ function shouldCacheItem(item: MediaItem): boolean {
       }
       return sizeBytes <= 0 || sizeBytes <= LOW_STORAGE_MEDIUM_FILE_BYTES;
     }
+    if (isVideo && sizeBytes > 0 && freeBytes > 0) {
+      return freeBytes - sizeBytes >= DEFAULT_MIN_FREE_BYTES;
+    }
   } catch {
     // ignore adaptive storage checks
   }
@@ -674,6 +678,9 @@ async function removeStaleFiles(
       return await fileExists(entry.localPath);
     })
   );
+  const activeCacheVerified =
+    activeList.length === 0 ||
+    activeCachedChecks.every((cached) => cached);
 
   for (const url of Object.keys(manifest)) {
     const entry = manifest[url];
@@ -685,6 +692,10 @@ async function removeStaleFiles(
     if (!entry.lastSeenAt) {
       entry.lastSeenAt = now;
       if (!options.immediate) continue;
+    }
+    if (!activeCacheVerified) {
+      // Keep the previous offline version until the active replacement set is fully cached.
+      continue;
     }
     if (!options.immediate && now - Number(entry.lastSeenAt || 0) < CACHE_RETENTION_MS) continue;
 
@@ -788,9 +799,11 @@ async function mapServerListToPlayable(
   const pendingDownloads: Array<() => Promise<void>> = [];
   const pendingLargeDownloads: Array<() => Promise<void>> = [];
   const pendingVideoDownloads: Array<() => Promise<void>> = [];
+  const deferredLargeVideoDownloads: Array<() => Promise<void>> = [];
   const priorityDownloads: Array<() => Promise<void>> = [];
   const priorityLargeDownloads: Array<() => Promise<void>> = [];
   const priorityVideoDownloads: Array<() => Promise<void>> = [];
+  const priorityDeferredLargeVideoDownloads: Array<() => Promise<void>> = [];
   for (const [path, item] of uniqueByUrl.entries()) {
     const existing = manifest[path];
     if (existing) {
@@ -823,7 +836,11 @@ async function mapServerListToPlayable(
       };
       const isPriority = prioritySection > 0 && Number(item?.section || 0) === prioritySection;
       if (isVideoItem(item)) {
-        (isPriority ? priorityVideoDownloads : pendingVideoDownloads).push(task);
+        if (sizeBytes > LARGE_MEDIA_BYTES) {
+          (isPriority ? priorityDeferredLargeVideoDownloads : deferredLargeVideoDownloads).push(task);
+        } else {
+          (isPriority ? priorityVideoDownloads : pendingVideoDownloads).push(task);
+        }
       } else if (sizeBytes > LARGE_MEDIA_BYTES) {
         (isPriority ? priorityLargeDownloads : pendingLargeDownloads).push(task);
       } else {
@@ -861,9 +878,11 @@ async function mapServerListToPlayable(
     !pendingDownloads.length &&
     !pendingLargeDownloads.length &&
     !pendingVideoDownloads.length &&
+    !deferredLargeVideoDownloads.length &&
     !priorityDownloads.length &&
     !priorityLargeDownloads.length &&
-    !priorityVideoDownloads.length
+    !priorityVideoDownloads.length &&
+    !priorityDeferredLargeVideoDownloads.length
   ) {
     return mapped;
   }
@@ -917,6 +936,16 @@ async function mapServerListToPlayable(
         ignoreOverride: true,
       });
     }
+    if (priorityDeferredLargeVideoDownloads.length) {
+      await runTasksWithConcurrency(priorityDeferredLargeVideoDownloads, 1, {
+        ignoreOverride: true,
+      });
+    }
+    if (deferredLargeVideoDownloads.length) {
+      await runTasksWithConcurrency(deferredLargeVideoDownloads, 1, {
+        ignoreOverride: true,
+      });
+    }
     const refreshed = buildRefreshed();
     await writeManifest(manifest);
     if (sameMediaList(memoryListCache, refreshed)) {
@@ -957,6 +986,27 @@ async function mapServerListToPlayable(
       await runTasksWithConcurrency(pendingLargeDownloads, LARGE_MEDIA_CONCURRENCY, {
         delayMs: nonPriorityThrottleMs,
       });
+    }
+    if (priorityDeferredLargeVideoDownloads.length || deferredLargeVideoDownloads.length) {
+      setTimeout(() => {
+        runTasksWithConcurrency(
+          [...priorityDeferredLargeVideoDownloads, ...deferredLargeVideoDownloads],
+          1,
+          { delayMs: nonPriorityThrottleMs }
+        )
+          .then(async () => {
+            const refreshed = buildRefreshed();
+            await writeManifest(manifest);
+            if (!sameMediaList(memoryListCache, refreshed)) {
+              await writeListCache(refreshed);
+            } else {
+              memoryListCacheAtMs = Date.now();
+            }
+          })
+          .catch(() => {
+            // no-op
+          });
+      }, LARGE_VIDEO_CACHE_DEFER_MS);
     }
     const refreshed = buildRefreshed();
     await writeManifest(manifest);

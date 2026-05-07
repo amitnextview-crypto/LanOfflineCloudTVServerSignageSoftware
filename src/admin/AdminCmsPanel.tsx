@@ -38,6 +38,7 @@ export default function AdminCmsPanel({
   const webRef = useRef<WebView>(null);
   const [cmsUrl, setCmsUrl] = useState("http://127.0.0.1:8080");
   const [backFocused, setBackFocused] = useState(false);
+  const [webMountKey, setWebMountKey] = useState(0);
 
   useEffect(() => {
     startEmbeddedCmsServer();
@@ -51,6 +52,9 @@ export default function AdminCmsPanel({
       duration: 260,
       useNativeDriver: true,
     }).start();
+    if (visible) {
+      setWebMountKey((value) => value + 1);
+    }
   }, [slide, visible]);
 
   if (!visible) return null;
@@ -146,8 +150,11 @@ export default function AdminCmsPanel({
               isPortraitScreen ? styles.webWrapPortrait : styles.webWrapLandscape,
               isCompactScreen ? styles.webWrapCompact : null,
             ]}
+            collapsable={false}
+            renderToHardwareTextureAndroid
           >
             <WebView
+              key={`${nativeTvCmsUrl}:${webMountKey}`}
               ref={webRef}
               source={{ uri: nativeTvCmsUrl }}
               style={styles.webview}
@@ -159,6 +166,7 @@ export default function AdminCmsPanel({
               allowingReadAccessToURL={"file://"}
               mixedContentMode="always"
               setSupportMultipleWindows={false}
+              androidLayerType="software"
               hideKeyboardAccessoryView
               overScrollMode="never"
               nestedScrollEnabled
@@ -259,6 +267,8 @@ const styles = StyleSheet.create({
     bottom: 0,
     width: "100%",
     backgroundColor: "#0f141c",
+    zIndex: 999,
+    elevation: 999,
   },
   header: {
     minHeight: 68,
@@ -320,6 +330,9 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(120, 190, 231, 0.2)",
+    backgroundColor: "#0f141c",
+    zIndex: 1,
+    elevation: 1,
   },
   webWrapLandscape: {
     marginHorizontal: 12,
@@ -335,6 +348,7 @@ const styles = StyleSheet.create({
   webview: {
     flex: 1,
     backgroundColor: "#0f141c",
+    opacity: 0.99,
   },
   iconBtn: {
     minWidth: 54,

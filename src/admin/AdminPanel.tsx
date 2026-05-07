@@ -1,13 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
-import { View, TouchableOpacity, Text, StyleSheet, Animated, TextInput, Alert } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { Animated, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { WebView } from "react-native-webview";
-import { findCMS, getServer, setServer } from "../services/serverService";
+import CmsAccessCard from "./CmsAccessCard";
+import { findCMS } from "../services/serverService";
 
 export default function AdminPanel({ visible, onClose }: any) {
   const slide = useRef(new Animated.Value(400)).current;
-
   const [server, updateServer] = useState("");
-  const [manualInput, setManualInput] = useState("http://172.19.88.107:8080");
 
   useEffect(() => {
     async function init() {
@@ -23,70 +22,31 @@ export default function AdminPanel({ visible, onClose }: any) {
       duration: 300,
       useNativeDriver: true,
     }).start();
-  }, [visible]);
-
-const saveManualServer = async () => {
-  if (!manualInput.startsWith("http")) {
-    return Alert.alert("Enter full URL, e.g., http://192.168.1.5:8080");
-  }
-
-  await setServer(manualInput);
-
-  Alert.alert("Saved CMS URL", manualInput);
-
-  // 🔥 Close panel
-  onClose();
-
-  // 🔥 Force full app reload
-  const { DevSettings } = require("react-native");
-  DevSettings.reload();
-};
+  }, [slide, visible]);
 
   if (!visible) return null;
 
   return (
     <Animated.View style={[styles.overlay, { transform: [{ translateX: slide }] }]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Admin Panel</Text>
+        <Text style={styles.title}>QR CMS</Text>
         <TouchableOpacity onPress={onClose}>
-          <Text style={styles.close}>✕</Text>
+          <Text style={styles.close}>X</Text>
         </TouchableOpacity>
       </View>
 
-      <View style={{ flex: 1, padding: 10 }}>
-        {/* Manual CMS input */}
-        <Text style={{ color: "#fff", marginBottom: 6 }}>CMS URL (manual):</Text>
-        <TextInput
-          placeholder="http://PC_IP:8080"
-          placeholderTextColor="#888"
-          value={manualInput}
-          onChangeText={setManualInput}
-          style={{
-            backgroundColor: "#222",
-            color: "#fff",
-            padding: 10,
-            borderRadius: 6,
-            marginBottom: 10,
-          }}
-        />
-        <TouchableOpacity
-          onPress={saveManualServer}
-          style={{ backgroundColor: "#4da3ff", padding: 10, borderRadius: 6, marginBottom: 20 }}
-        >
-          <Text style={{ color: "#fff", textAlign: "center" }}>Save CMS URL</Text>
-        </TouchableOpacity>
-
-        {/* WebView for config */}
+      <View style={styles.content}>
+        <CmsAccessCard compact />
         {server ? (
           <WebView
             source={{ uri: server }}
-            style={{ flex: 1 }}
+            style={styles.webview}
             onMessage={(event) => {
               if (event.nativeEvent.data === "CONFIG_SAVED") onClose();
             }}
           />
         ) : (
-          <Text style={{ color: "#fff" }}>CMS not detected. Enter URL above.</Text>
+          <Text style={styles.emptyText}>QR CMS is starting...</Text>
         )}
       </View>
     </Animated.View>
@@ -112,10 +72,7 @@ const styles = StyleSheet.create({
   },
   title: { color: "#fff", fontSize: 18, fontWeight: "bold" },
   close: { color: "#fff", fontSize: 24 },
+  content: { flex: 1, padding: 10 },
+  webview: { flex: 1, marginTop: 10 },
+  emptyText: { color: "#fff", marginTop: 10 },
 });
-
-
-
-
-
-
