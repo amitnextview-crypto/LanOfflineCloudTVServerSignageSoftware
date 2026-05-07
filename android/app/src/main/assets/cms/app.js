@@ -35,7 +35,52 @@ const SECTION_SOURCE_TYPES = {
   multimedia: "multimedia",
   web: "web",
   youtube: "youtube",
+  template: "template",
 };
+
+const ORDER_TEMPLATE_PRESETS = [
+  ["burger-queue", "Burger Queue Board", "Ready to Collect", "Preparation of Orders", "Welcome to Diner Burger", "Prep", "Ready", "705\n713\n715\n732\n771\n777", "657\n653\n655\n144", "#f4f72a", "#ffffff", "#d92736", "#f7f7f7", "#101010", "#1f2328", 54, "classic"],
+  ["prep-ready", "Prep Ready Split", "Ready", "Prep", "Order status", "Prep", "Ready", "A254\nA258\nA255\nA259\nB025\nA256\nA257", "A253\nB024", "#5fb052", "#2695d8", "#6cc04a", "#ffffff", "#222222", "#ffffff", 50, "split"],
+  ["pharmacy-token", "Pharmacy Token", "Now Serving", "Waiting Tokens", "Please keep your bill ready", "Waiting", "Counter", "P101\nP102\nP103\nP104\nP105", "P099\nP100", "#00e5ff", "#8bd450", "#ffcc33", "#f6fbff", "#07131f", "#eef7ff", 48, "split"],
+  ["clinic-call", "Clinic Call Board", "Doctor Ready", "In Queue", "Silence your phone inside clinic", "Queue", "Room", "C12\nC13\nC14\nC15\nC16", "C10\nC11", "#4ade80", "#38bdf8", "#f97316", "#ffffff", "#111827", "#f8fafc", 46, "split"],
+  ["bank-counter", "Bank Counter", "Counter Open", "Waiting", "Thank you for banking with us", "Waiting", "Counter", "B221\nB222\nB223\nB224\nB225", "B219\nB220", "#fde047", "#60a5fa", "#22c55e", "#ffffff", "#0b1120", "#f8fafc", 48, "classic"],
+  ["cafe-pickup", "Cafe Pickup", "Pick Up", "Being Prepared", "Fresh coffee. Fresh moments.", "Preparing", "Ready", "C701\nC702\nC703\nC704", "C699\nC700", "#facc15", "#fb923c", "#ef4444", "#fff7ed", "#1c1917", "#fff7ed", 50, "classic"],
+  ["retail-service", "Retail Service Desk", "Collect Item", "Processing", "Visit service desk for support", "Processing", "Ready", "R45\nR46\nR47\nR48\nR49", "R43\nR44", "#a7f3d0", "#93c5fd", "#f472b6", "#f8fafc", "#111827", "#f8fafc", 46, "split"],
+  ["airport-lounge", "Lounge Display", "Boarding Ready", "Security Check", "Have your ID ready", "Check", "Ready", "L11\nL12\nL13\nL14", "L09\nL10", "#fef08a", "#67e8f9", "#c084fc", "#ffffff", "#020617", "#e2e8f0", 48, "classic"],
+  ["hotel-reception", "Hotel Reception", "Room Ready", "Check-in Queue", "Welcome to our hotel", "Check-in", "Ready", "H301\nH302\nH303\nH304", "H299\nH300", "#fbbf24", "#34d399", "#60a5fa", "#fffaf0", "#1f2937", "#fffaf0", 48, "split"],
+  ["parking-token", "Parking Token", "Vehicle Ready", "In Service", "Drive safe", "Service", "Ready", "V81\nV82\nV83\nV84", "V79\nV80", "#fb7185", "#22d3ee", "#facc15", "#ffffff", "#18181b", "#fafafa", 46, "classic"],
+  ["government-counter", "Public Counter", "Please Proceed", "Token Queue", "Keep documents ready", "Queue", "Counter", "G501\nG502\nG503\nG504\nG505", "G499\nG500", "#bef264", "#38bdf8", "#fb923c", "#f8fafc", "#0f172a", "#f8fafc", 44, "split"],
+  ["salon-spa", "Salon Appointment", "Chair Ready", "Waiting", "Relax. Your turn is coming.", "Waiting", "Ready", "S31\nS32\nS33\nS34", "S29\nS30", "#f9a8d4", "#c4b5fd", "#f59e0b", "#fff7fb", "#2d1b2f", "#fff7fb", 46, "split"],
+].map(([id, name, title, subtitle, footer, prepTitle, readyTitle, prepItems, readyItems, primaryColor, secondaryColor, accentColor, textColor, backgroundColor, panelColor, fontSize, layout]) => ({
+  id,
+  name,
+  title,
+  subtitle,
+  footer,
+  prepTitle,
+  readyTitle,
+  prepItems,
+  readyItems,
+  primaryColor,
+  secondaryColor,
+  accentColor,
+  textColor,
+  backgroundColor,
+  panelColor,
+  fontSize,
+  layout,
+  imageData: "",
+}));
+
+function createDefaultOrderTemplate(presetId = "burger-queue") {
+  const preset = ORDER_TEMPLATE_PRESETS.find((item) => item.id === presetId) || ORDER_TEMPLATE_PRESETS[0];
+  return {
+    ...preset,
+    id: `${preset.id}-${Date.now()}`,
+    presetId: preset.id,
+    name: preset.name,
+  };
+}
 
 let selectedGrid3Layout = "stack-v";
 let currentConfig = null;
@@ -2081,6 +2126,102 @@ function normalizeSectionSourceUrl(sourceType, value) {
   return "";
 }
 
+function normalizeSectionSourceType(value) {
+  const type = String(value || "").trim();
+  return Object.values(SECTION_SOURCE_TYPES).includes(type)
+    ? type
+    : SECTION_SOURCE_TYPES.multimedia;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function parseTemplateItems(value) {
+  return String(value || "")
+    .split(/\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 24);
+}
+
+function getTemplatesFromSectionConfig(sectionConfig = {}) {
+  if (Array.isArray(sectionConfig.sourceTemplates)) {
+    return sectionConfig.sourceTemplates.filter((item) => item && typeof item === "object");
+  }
+  if (sectionConfig.sourceTemplate && typeof sectionConfig.sourceTemplate === "object") {
+    return [sectionConfig.sourceTemplate];
+  }
+  return [];
+}
+
+function buildOrderTemplateMarkup(template = {}, { preview = false } = {}) {
+  const tpl = { ...createDefaultOrderTemplate(template?.presetId || "burger-queue"), ...(template || {}) };
+  const prepItems = parseTemplateItems(tpl.prepItems);
+  const readyItems = parseTemplateItems(tpl.readyItems);
+  const fontSize = Math.max(24, Math.min(96, Number(tpl.fontSize || 54)));
+  const styleId = ["classic", "split", "royal", "glass", "cinema", "executive"].includes(String(tpl.layout || ""))
+    ? String(tpl.layout || "classic")
+    : "classic";
+  const split = styleId === "split" || styleId === "executive";
+  const style = [
+    `--tpl-bg:${escapeHtml(tpl.backgroundColor || "#101010")}`,
+    `--tpl-panel:${escapeHtml(tpl.panelColor || "#ffffff")}`,
+    `--tpl-primary:${escapeHtml(tpl.primaryColor || "#f4f72a")}`,
+    `--tpl-secondary:${escapeHtml(tpl.secondaryColor || "#2695d8")}`,
+    `--tpl-accent:${escapeHtml(tpl.accentColor || "#d92736")}`,
+    `--tpl-text:${escapeHtml(tpl.textColor || "#ffffff")}`,
+    `--tpl-font:${fontSize}px`,
+  ].join(";");
+
+  const prepHtml = prepItems.map((item) => `<div class="tpl-item prep">${escapeHtml(item)}</div>`).join("");
+  const readyHtml = readyItems.map((item, index) =>
+    `<div class="tpl-item ready ${index === 0 ? "hero-ready" : ""}">${escapeHtml(item)}</div>`
+  ).join("");
+  const imageData = String(tpl.imageData || "").trim();
+  const imageHtml = imageData
+    ? `<img class="tpl-brand-img" src="${escapeHtml(imageData)}" alt="" />`
+    : `<div class="tpl-brand-mark">${escapeHtml(tpl.brandText || String(tpl.name || "T").slice(0, 1))}</div>`;
+  const badgeText = String(tpl.badgeText || "LIVE").trim();
+  const prepTag = String(tpl.prepTag || "Preparing").trim();
+  const readyTag = String(tpl.readyTag || "Ready").trim();
+  const footerBadge = String(tpl.footerBadge || "NextView").trim();
+
+  return `
+    <div class="order-template ${split ? "split" : "classic"} style-${styleId} ${preview ? "is-preview" : ""}" style="${style}">
+      <div class="tpl-screen">
+        <div class="tpl-glow one"></div>
+        <div class="tpl-glow two"></div>
+        <div class="tpl-top">
+          <div class="tpl-brand-block">
+            <div class="tpl-icon">${imageHtml}</div>
+          </div>
+          <div class="tpl-center-title">
+            <span>${escapeHtml(tpl.name || "Display Board")}</span>
+          </div>
+          <div class="tpl-bag">${escapeHtml(badgeText)}</div>
+        </div>
+        <div class="tpl-body">
+          <section class="tpl-column prep-col">
+            <div class="tpl-column-title"><span>${escapeHtml(prepTag)}</span>${escapeHtml(tpl.subtitle || "Preparation of Orders")}</div>
+            <div class="tpl-list prep-list">${prepHtml || `<div class="tpl-empty">No prep orders</div>`}</div>
+          </section>
+          <section class="tpl-column ready-col">
+            <div class="tpl-column-title"><span>${escapeHtml(readyTag)}</span>${escapeHtml(tpl.title || "Ready to Collect")}</div>
+            <div class="tpl-list ready-list">${readyHtml || `<div class="tpl-empty">No ready orders</div>`}</div>
+          </section>
+        </div>
+        <div class="tpl-footer"><strong>${escapeHtml(footerBadge)}</strong><em>${escapeHtml(tpl.footer || "")}</em><span></span></div>
+      </div>
+    </div>
+  `;
+}
+
 function buildPdfViewerUrl(fileUrl, page) {
   const safePage = Math.max(1, Number(page || 1));
   return `/pdf-viewer.html?file=${encodeURIComponent(fileUrl)}&page=${safePage}`;
@@ -2520,7 +2661,7 @@ function applyPreviewLiveOverlay(slot, status, sectionNumber, cacheStatusOverrid
 
 function renderSectionSlot(slot, sectionNumber, config) {
   const sectionConfig = config?.sections?.[sectionNumber - 1] || {};
-  const sourceType = sectionConfig.sourceType || SECTION_SOURCE_TYPES.multimedia;
+  const sourceType = normalizeSectionSourceType(sectionConfig.sourceType);
   const sourceUrl = normalizeSectionSourceUrl(sourceType, sectionConfig.sourceUrl);
 
   const files = previewMediaBySection[sectionNumber] || [];
@@ -2562,6 +2703,23 @@ function renderSectionSlot(slot, sectionNumber, config) {
     frame.style.border = "0";
     slot.appendChild(frame);
     applyPreviewLiveOverlay(slot, selectedStatus, sectionNumber, fallbackCacheStatus);
+    return;
+  }
+
+  if (sourceType === SECTION_SOURCE_TYPES.template) {
+    const templates = getTemplatesFromSectionConfig(sectionConfig);
+    const template = templates[state.index % Math.max(1, templates.length)] || createDefaultOrderTemplate("burger-queue");
+    const wrap = document.createElement("div");
+    wrap.className = "preview-template-wrap";
+    wrap.innerHTML = buildOrderTemplateMarkup(template, { preview: true });
+    slot.appendChild(wrap);
+    if (templates.length > 1) {
+      state.timer = setTimeout(() => {
+        state.index = (state.index + 1) % templates.length;
+        renderSectionSlot(slot, sectionNumber, config);
+      }, getSectionDurationMs(config, sectionNumber));
+    }
+    applyPreviewLiveOverlay(slot, selectedStatus, sectionNumber, fallbackCacheStatus || "Template");
     return;
   }
 
@@ -2834,20 +2992,23 @@ function buildConfigFromForm() {
       {
         slideDirection: document.getElementById("dir1").value,
         slideDuration: Number(document.getElementById("duration1").value || 5),
-        sourceType: document.getElementById("sourceType1")?.value || SECTION_SOURCE_TYPES.multimedia,
+        sourceType: normalizeSectionSourceType(document.getElementById("sourceType1")?.value),
         sourceUrl: document.getElementById("sourceUrl1")?.value || "",
+        sourceTemplates: getTemplatesFromSectionConfig(currentConfig?.sections?.[0] || {}),
       },
       {
         slideDirection: document.getElementById("dir2").value,
         slideDuration: Number(document.getElementById("duration2").value || 5),
-        sourceType: document.getElementById("sourceType2")?.value || SECTION_SOURCE_TYPES.multimedia,
+        sourceType: normalizeSectionSourceType(document.getElementById("sourceType2")?.value),
         sourceUrl: document.getElementById("sourceUrl2")?.value || "",
+        sourceTemplates: getTemplatesFromSectionConfig(currentConfig?.sections?.[1] || {}),
       },
       {
         slideDirection: document.getElementById("dir3").value,
         slideDuration: Number(document.getElementById("duration3").value || 5),
-        sourceType: document.getElementById("sourceType3")?.value || SECTION_SOURCE_TYPES.multimedia,
+        sourceType: normalizeSectionSourceType(document.getElementById("sourceType3")?.value),
         sourceUrl: document.getElementById("sourceUrl3")?.value || "",
+        sourceTemplates: getTemplatesFromSectionConfig(currentConfig?.sections?.[2] || {}),
       },
     ],
     ticker: {
@@ -3340,16 +3501,341 @@ function onSectionSourceUrlInput() {
   renderScreenPreview();
 }
 
+function getSectionTemplates(section) {
+  const config = currentConfig || buildConfigFromForm();
+  return getTemplatesFromSectionConfig(config?.sections?.[section - 1] || {});
+}
+
+function setSectionTemplates(section, templates) {
+  const selected = (Array.isArray(templates) ? templates : [])
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({ ...item }));
+  currentConfig = currentConfig || buildConfigFromForm();
+  currentConfig.sections = Array.isArray(currentConfig.sections) ? currentConfig.sections : [];
+  currentConfig.sections[section - 1] = {
+    ...(currentConfig.sections[section - 1] || {}),
+    sourceType: selected.length ? SECTION_SOURCE_TYPES.template : SECTION_SOURCE_TYPES.multimedia,
+    sourceUrl: "",
+    sourceTemplates: selected,
+    sourceTemplate: null,
+  };
+  const typeEl = document.getElementById(`sourceType${section}`);
+  if (typeEl) typeEl.value = selected.length ? SECTION_SOURCE_TYPES.template : SECTION_SOURCE_TYPES.multimedia;
+  updateSectionUploadMode(section);
+  renderTemplateSummary(section);
+  renderScreenPreview();
+}
+
+function renderTemplateSummary(section) {
+  const summary = document.getElementById(`templateSummary${section}`);
+  if (!summary) return;
+  const templates = getSectionTemplates(section);
+  if (!templates.length) {
+    summary.innerHTML = `<span>No template selected</span>`;
+    return;
+  }
+  summary.innerHTML = templates
+    .map((template, index) => `<span class="template-chip">${index + 1}. ${escapeHtml(template.name || "Custom Template")}</span>`)
+    .join("");
+}
+
+function addTemplateToSection(section) {
+  showTemplateGallery(section);
+}
+
+function deleteTemplateFromSection(section) {
+  setSectionTemplates(section, []);
+  showNotice("success", "Templates Removed", `Section ${section} templates removed.`);
+}
+
+function cloneTemplate(template) {
+  return {
+    ...template,
+    id: template?.id || `${template?.presetId || "template"}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  };
+}
+
+function getTemplateStyleLabel(layout) {
+  const labels = {
+    royal: "Royal 3D Board",
+    executive: "Executive Split",
+    glass: "Glass Premium",
+    cinema: "Cinema Status",
+    classic: "Classic Board",
+    split: "Prep Ready Split",
+  };
+  return labels[String(layout || "")] || "Royal Board";
+}
+
+function showTemplateGallery(section) {
+  removeTemplateEditor();
+  const selectedTemplates = getSectionTemplates(section);
+  const selectedIds = new Set(selectedTemplates.map((item) => String(item.id || item.presetId || "")));
+  let galleryTemplates = ORDER_TEMPLATE_PRESETS.map((preset) => {
+    const existing = selectedTemplates.find((item) => String(item.presetId || item.id) === preset.id);
+    return cloneTemplate(existing || createDefaultOrderTemplate(preset.id));
+  });
+
+  const overlay = document.createElement("div");
+  overlay.className = "template-editor-overlay";
+  overlay.innerHTML = `
+    <div class="template-gallery-panel" role="dialog" aria-modal="true">
+      <div class="template-editor-head">
+        <div>
+          <h2>Ready-made Templates</h2>
+          <p class="section-help">Multiple templates select karein. Done ke baad Save Settings dabane par TV par ye templates rotate honge.</p>
+        </div>
+        <div class="template-head-actions">
+          <div id="templateGalleryCount" class="section-help">0 selected</div>
+          <button class="btn primary" type="button" data-template-done>Done</button>
+          <button class="btn warning" type="button" data-template-close>Close</button>
+        </div>
+      </div>
+      <div id="templateGalleryGrid" class="template-gallery-grid"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const renderGallery = () => {
+    const grid = overlay.querySelector("#templateGalleryGrid");
+    const count = overlay.querySelector("#templateGalleryCount");
+    if (!grid) return;
+    grid.innerHTML = galleryTemplates.map((template, index) => {
+      const key = String(template.id || template.presetId || index);
+      const checked = selectedIds.has(key) || selectedIds.has(String(template.presetId || ""));
+      return `
+        <article class="template-gallery-card ${checked ? "is-selected" : ""}">
+          <div class="template-gallery-preview">${buildOrderTemplateMarkup(template, { preview: true })}</div>
+          <div class="template-gallery-meta">
+            <strong>${escapeHtml(template.name || "Custom Template")}</strong>
+            <span>${escapeHtml(getTemplateStyleLabel(template.layout))}</span>
+          </div>
+          <div class="template-gallery-actions">
+            <button class="btn ${checked ? "warning" : "primary"}" type="button" data-template-select="${index}">
+              ${checked ? "Selected" : "Select"}
+            </button>
+            <button class="btn warning" type="button" data-template-edit="${index}">Edit</button>
+          </div>
+        </article>
+      `;
+    }).join("");
+    if (count) count.textContent = `${selectedIds.size} selected`;
+  };
+
+  overlay.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.hasAttribute("data-template-close") || target === overlay) {
+      removeTemplateEditor();
+      return;
+    }
+    if (target.hasAttribute("data-template-done")) {
+      const selected = galleryTemplates.filter((template, index) => {
+        const key = String(template.id || template.presetId || index);
+        return selectedIds.has(key) || selectedIds.has(String(template.presetId || ""));
+      });
+      setSectionTemplates(section, selected);
+      removeTemplateEditor();
+      showNotice("success", "Templates Added", `${selected.length} template(s) added. Click Save Settings to apply on TV.`);
+      return;
+    }
+    const selectIndex = target.getAttribute("data-template-select");
+    if (selectIndex !== null) {
+      const template = galleryTemplates[Number(selectIndex)];
+      const key = String(template?.id || template?.presetId || selectIndex);
+      if (selectedIds.has(key)) {
+        selectedIds.delete(key);
+      } else {
+        selectedIds.add(key);
+      }
+      renderGallery();
+      return;
+    }
+    const editIndex = target.getAttribute("data-template-edit");
+    if (editIndex !== null) {
+      const index = Number(editIndex);
+      showTemplateEditor(galleryTemplates[index], (updated) => {
+        galleryTemplates[index] = cloneTemplate({ ...updated, id: galleryTemplates[index].id });
+        selectedIds.add(String(galleryTemplates[index].id || galleryTemplates[index].presetId || index));
+        renderGallery();
+      }, { title: galleryTemplates[index]?.name || "Edit Template", backToGallery: true });
+    }
+  });
+  renderGallery();
+}
+
+function showTemplateEditor(template, onSave, options = {}) {
+  const existing = cloneTemplate(template || createDefaultOrderTemplate("burger-queue"));
+  if (!options.backToGallery) removeTemplateEditor();
+  let imageData = String(existing.imageData || "");
+
+  const overlay = document.createElement("div");
+  overlay.className = `template-editor-overlay ${options.backToGallery ? "template-edit-modal" : ""}`;
+  overlay.innerHTML = `
+    <div class="template-editor-panel" role="dialog" aria-modal="true">
+      <div class="template-editor-head">
+        <div>
+          <h2>${escapeHtml(options.title || "Template Editor")}</h2>
+          <p class="section-help">Text, colors, background aur optional image/logo edit karein. Image 500KB se kam honi chahiye.</p>
+        </div>
+        <button class="btn warning" type="button" data-template-close>Close</button>
+      </div>
+      <div class="template-editor-grid">
+        <div class="template-device-preview">
+          <div class="template-device-frame">
+            <div id="templateEditorPreview" class="template-live-preview"></div>
+          </div>
+        </div>
+        <form id="templateEditorForm" class="template-editor-form">
+          <label>Template Name</label>
+          <input name="name" type="text" value="${escapeHtml(existing.name || "")}" />
+          <label>Style</label>
+          <select name="layout">
+            <option value="royal" ${existing.layout === "royal" ? "selected" : ""}>Royal 3D Board</option>
+            <option value="executive" ${existing.layout === "executive" ? "selected" : ""}>Executive Split</option>
+            <option value="glass" ${existing.layout === "glass" ? "selected" : ""}>Glass Premium</option>
+            <option value="cinema" ${existing.layout === "cinema" ? "selected" : ""}>Cinema Status</option>
+            <option value="classic" ${existing.layout === "classic" ? "selected" : ""}>Classic Board</option>
+            <option value="split" ${existing.layout === "split" ? "selected" : ""}>Prep Ready Split</option>
+          </select>
+          <div class="template-field-pair">
+            <label>Brand Mark / Logo Text<input name="brandText" type="text" value="${escapeHtml(existing.brandText || String(existing.name || "T").slice(0, 1))}" /></label>
+            <label>Top Badge<input name="badgeText" type="text" value="${escapeHtml(existing.badgeText || "LIVE")}" /></label>
+          </div>
+          <div class="template-field-pair">
+            <label>Left Badge Tag<input name="prepTag" type="text" value="${escapeHtml(existing.prepTag || "Preparing")}" /></label>
+            <label>Right Badge Tag<input name="readyTag" type="text" value="${escapeHtml(existing.readyTag || "Ready")}" /></label>
+          </div>
+          <div class="template-field-pair">
+            <label>Left Subtitle<input name="subtitle" type="text" value="${escapeHtml(existing.subtitle || "")}" /></label>
+            <label>Right Subtitle<input name="title" type="text" value="${escapeHtml(existing.title || "")}" /></label>
+          </div>
+          <label>Prep Orders</label>
+          <textarea name="prepItems" rows="5">${escapeHtml(existing.prepItems || "")}</textarea>
+          <label>Ready Orders</label>
+          <textarea name="readyItems" rows="5">${escapeHtml(existing.readyItems || "")}</textarea>
+          <div class="template-field-pair">
+            <label>Footer Badge<input name="footerBadge" type="text" value="${escapeHtml(existing.footerBadge || "NextView")}" /></label>
+            <label>Footer Text<input name="footer" type="text" value="${escapeHtml(existing.footer || "")}" /></label>
+          </div>
+          <label>Logo / Image (max 500KB)</label>
+          <input name="imageFile" type="file" accept="image/*" />
+          <div id="templateImageStatus" class="section-help">${imageData ? "Image added" : "No image selected"}</div>
+          <div class="template-color-grid">
+            <label>Text<input name="textColor" type="color" value="${escapeHtml(existing.textColor || "#ffffff")}" /></label>
+            <label>Background<input name="backgroundColor" type="color" value="${escapeHtml(existing.backgroundColor || "#101010")}" /></label>
+            <label>Panel<input name="panelColor" type="color" value="${escapeHtml(existing.panelColor || "#ffffff")}" /></label>
+            <label>Ready<input name="primaryColor" type="color" value="${escapeHtml(existing.primaryColor || "#f4f72a")}" /></label>
+            <label>Prep<input name="secondaryColor" type="color" value="${escapeHtml(existing.secondaryColor || "#2695d8")}" /></label>
+            <label>Accent<input name="accentColor" type="color" value="${escapeHtml(existing.accentColor || "#d92736")}" /></label>
+          </div>
+          <label>Number Font Size</label>
+          <input name="fontSize" type="range" min="24" max="96" value="${Number(existing.fontSize || 54)}" />
+          <div class="template-editor-actions">
+            <button class="btn primary" type="submit">Save Template</button>
+            <button class="btn danger" type="button" data-template-delete>Delete</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const form = overlay.querySelector("#templateEditorForm");
+  const readForm = () => {
+    const data = new FormData(form);
+    return {
+      ...existing,
+      name: String(data.get("name") || "Custom Template"),
+      layout: String(data.get("layout") || "classic"),
+      brandText: String(data.get("brandText") || ""),
+      badgeText: String(data.get("badgeText") || ""),
+      prepTag: String(data.get("prepTag") || ""),
+      readyTag: String(data.get("readyTag") || ""),
+      subtitle: String(data.get("subtitle") || ""),
+      title: String(data.get("title") || ""),
+      prepItems: String(data.get("prepItems") || ""),
+      readyItems: String(data.get("readyItems") || ""),
+      footerBadge: String(data.get("footerBadge") || ""),
+      footer: String(data.get("footer") || ""),
+      textColor: String(data.get("textColor") || "#ffffff"),
+      backgroundColor: String(data.get("backgroundColor") || "#101010"),
+      panelColor: String(data.get("panelColor") || "#ffffff"),
+      primaryColor: String(data.get("primaryColor") || "#f4f72a"),
+      secondaryColor: String(data.get("secondaryColor") || "#2695d8"),
+      accentColor: String(data.get("accentColor") || "#d92736"),
+      fontSize: Number(data.get("fontSize") || 54),
+      imageData,
+    };
+  };
+  const refreshPreview = () => {
+    const preview = overlay.querySelector("#templateEditorPreview");
+    if (preview) preview.innerHTML = buildOrderTemplateMarkup(readForm(), { preview: true });
+  };
+
+  form.addEventListener("input", refreshPreview);
+  form.addEventListener("change", refreshPreview);
+  form.elements.imageFile?.addEventListener("change", (event) => {
+    const file = event.target?.files?.[0];
+    const status = overlay.querySelector("#templateImageStatus");
+    if (!file) {
+      imageData = "";
+      if (status) status.textContent = "No image selected";
+      refreshPreview();
+      return;
+    }
+    if (file.size > 500 * 1024) {
+      event.target.value = "";
+      if (status) status.textContent = "Image must be less than 500KB.";
+      showNotice("warning", "Image Too Large", "Please select an image below 500KB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      imageData = String(reader.result || "");
+      if (status) status.textContent = `${file.name} added`;
+      refreshPreview();
+    };
+    reader.readAsDataURL(file);
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    onSave?.(readForm());
+    overlay.remove();
+    showNotice("success", "Template Saved", options.backToGallery ? "Template updated and selected." : "Template saved.");
+  });
+  overlay.querySelector("[data-template-close]")?.addEventListener("click", () => overlay.remove());
+  overlay.querySelector("[data-template-delete]")?.addEventListener("click", () => {
+    overlay.remove();
+  });
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  refreshPreview();
+}
+
+function removeTemplateEditor() {
+  document.querySelectorAll(".template-editor-overlay").forEach((el) => el.remove());
+}
+
 function updateSectionUploadMode(section) {
   const typeEl = document.getElementById(`sourceType${section}`);
   const uploadWrap = document.getElementById(`uploadWrap${section}`);
   const sourceWrap = document.getElementById(`sourceUrlWrap${section}`);
+  const templateWrap = document.getElementById(`templateWrap${section}`);
   const sourceInput = document.getElementById(`sourceUrl${section}`);
   if (!typeEl) return;
 
-  const sourceType = typeEl.value || SECTION_SOURCE_TYPES.multimedia;
+  const sourceType = normalizeSectionSourceType(typeEl.value);
+  if (typeEl.value !== sourceType) typeEl.value = sourceType;
   if (uploadWrap) uploadWrap.classList.toggle("hidden", sourceType !== SECTION_SOURCE_TYPES.multimedia);
-  if (sourceWrap) sourceWrap.classList.toggle("hidden", sourceType === SECTION_SOURCE_TYPES.multimedia);
+  if (sourceWrap) {
+    sourceWrap.classList.toggle(
+      "hidden",
+      sourceType === SECTION_SOURCE_TYPES.multimedia || sourceType === SECTION_SOURCE_TYPES.template
+    );
+  }
+  if (templateWrap) templateWrap.classList.toggle("hidden", sourceType !== SECTION_SOURCE_TYPES.template);
 
   if (sourceInput) {
     if (sourceType === SECTION_SOURCE_TYPES.youtube) {
@@ -3360,6 +3846,7 @@ function updateSectionUploadMode(section) {
       sourceInput.placeholder = "";
     }
   }
+  renderTemplateSummary(section);
 }
 
 function renderUploadSections() {
@@ -3378,9 +3865,10 @@ function renderUploadSections() {
             <h3>Section ${i}</h3>
             <div class="source-controls source-controls-stacked">
               <select id="sourceType${i}" onchange="onSectionSourceChange(${i})">
-            <option value="multimedia">Multimedia (Image/Video)</option>
-            <option value="web">Website URL</option>
-            <option value="youtube">YouTube URL</option>
+                <option value="multimedia" selected>Multimedia (Image/Video)</option>
+                <option value="web">Website URL</option>
+                <option value="youtube">YouTube URL</option>
+                <option value="template">Ready Template (Offline Cached)</option>
           </select>
         </div>
         <div id="sourceUrlWrap${i}" class="hidden upload-source-url-wrap">
@@ -3392,6 +3880,13 @@ function renderUploadSections() {
             placeholder=""
             oninput="onSectionSourceUrlInput()"
           />
+        </div>
+        <div id="templateWrap${i}" class="template-tools hidden">
+          <div class="template-actions">
+            <button class="btn primary" type="button" onclick="addTemplateToSection(${i})">Add Templates</button>
+            <button class="btn danger" type="button" onclick="deleteTemplateFromSection(${i})">Clear Templates</button>
+          </div>
+          <div id="templateSummary${i}" class="section-help">No template selected</div>
         </div>
           ${
               IS_TV_COMPACT_MODE
@@ -3594,9 +4089,9 @@ async function loadDevices(options = {}) {
 }
 
 async function uploadMedia(section) {
-  const sourceType = document.getElementById(`sourceType${section}`)?.value || SECTION_SOURCE_TYPES.multimedia;
+  const sourceType = normalizeSectionSourceType(document.getElementById(`sourceType${section}`)?.value);
   if (sourceType !== SECTION_SOURCE_TYPES.multimedia) {
-    showNotice("info", "Upload Not Required", "For Website/YouTube source, upload is not required. Save settings only.");
+    showNotice("info", "Upload Not Required", "For Website/YouTube/Ready Template source, upload is not required. Save settings only.");
     return;
   }
 
@@ -3903,7 +4398,7 @@ async function loadConfig() {
     const sectionConfig = config.sections?.[i - 1] || {};
     const typeEl = document.getElementById(`sourceType${i}`);
     const urlEl = document.getElementById(`sourceUrl${i}`);
-    if (typeEl) typeEl.value = sectionConfig.sourceType || SECTION_SOURCE_TYPES.multimedia;
+    if (typeEl) typeEl.value = normalizeSectionSourceType(sectionConfig.sourceType);
     if (urlEl) urlEl.value = sectionConfig.sourceUrl || "";
     updateSectionUploadMode(i);
   }
@@ -4174,6 +4669,9 @@ window.__cmsSetSelectedOrigins = async (origins = []) => {
 };
 window.__cmsGetAccessOverrides = () => ({ ...(cmsAccessOverrides || {}) });
 window.__cmsReloadAccessOverrides = loadAccessOverrides;
+window.addTemplateToSection = addTemplateToSection;
+window.showTemplateEditor = showTemplateEditor;
+window.deleteTemplateFromSection = deleteTemplateFromSection;
 
   document.addEventListener("DOMContentLoaded", async () => {
   updateViewportHeightVar();

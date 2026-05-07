@@ -68,9 +68,9 @@ const DEFAULT_CONFIG_TEMPLATE = {
   animation: "slide",
   bgColor: "#000000",
   sections: [
-    { slideDirection: "left", slideDuration: 5, sourceType: "multimedia", sourceUrl: "" },
-    { slideDirection: "left", slideDuration: 5, sourceType: "multimedia", sourceUrl: "" },
-    { slideDirection: "left", slideDuration: 5, sourceType: "multimedia", sourceUrl: "" },
+    { slideDirection: "left", slideDuration: 5, sourceType: "multimedia", sourceUrl: "", sourceTemplate: null, sourceTemplates: [] },
+    { slideDirection: "left", slideDuration: 5, sourceType: "multimedia", sourceUrl: "", sourceTemplate: null, sourceTemplates: [] },
+    { slideDirection: "left", slideDuration: 5, sourceType: "multimedia", sourceUrl: "", sourceTemplate: null, sourceTemplates: [] },
   ],
   ticker: {
     text: "",

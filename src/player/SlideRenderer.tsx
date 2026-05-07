@@ -20,6 +20,7 @@ import {
   SOURCE_TYPES,
   areMediaListsEqual,
   buildListSignature,
+  buildOrderTemplateHtml,
   buildPdfViewerUrl,
   buildRemoteMediaUri,
   findMatchingIndex,
@@ -81,6 +82,7 @@ export default function SlideRenderer({
   });
   const [imageVisibleSlot, setImageVisibleSlot] = useState<"a" | "b">("a");
   const [forceLocalRestart, setForceLocalRestart] = useState(false);
+  const [templateIndex, setTemplateIndex] = useState(0);
   const [resumePositionMs, setResumePositionMs] = useState(0);
   const [transitionBackdrop, setTransitionBackdrop] = useState<any | null>(null);
   const [containerLayout, setContainerLayout] = useState({
@@ -289,6 +291,12 @@ export default function SlideRenderer({
   const sectionConfig = config?.sections?.[sectionIndex] || {};
   const sourceType = sectionConfig?.sourceType || SOURCE_TYPES.multimedia;
   const sourceUrl = sectionConfig?.sourceUrl || "";
+  const sourceTemplates = Array.isArray(sectionConfig?.sourceTemplates)
+    ? sectionConfig.sourceTemplates
+    : sectionConfig?.sourceTemplate
+    ? [sectionConfig.sourceTemplate]
+    : [];
+  const sourceTemplate = sourceTemplates[templateIndex % Math.max(1, sourceTemplates.length)] || null;
   const sectionResizeMode = sectionConfig?.usbFitMode || "stretch";
   const isMultiPaneLayout = config?.layout === "grid2" || config?.layout === "grid3";
   const mediaRotateLayerStyle = styles.fillLayer;
@@ -605,6 +613,8 @@ export default function SlideRenderer({
         setUri(normalizeWebUrl(sourceUrl));
       } else if (sourceType === SOURCE_TYPES.youtube) {
         setUri(normalizeYoutubeEmbedUrl(sourceUrl));
+      } else if (sourceType === SOURCE_TYPES.template) {
+        setUri("template://order-board");
       } else {
         setUri("");
       }
@@ -636,6 +646,18 @@ export default function SlideRenderer({
     };
     load();
   }, [sectionIndex, server, mediaVersion, sourceType, sourceUrl]);
+
+  useEffect(() => {
+    if (sourceType !== SOURCE_TYPES.template || sourceTemplates.length <= 1) {
+      setTemplateIndex(0);
+      return;
+    }
+    const durationMs = getSlideDurationMs();
+    const timer = setInterval(() => {
+      setTemplateIndex((prev) => (prev + 1) % sourceTemplates.length);
+    }, durationMs);
+    return () => clearInterval(timer);
+  }, [sourceType, sourceTemplates.length, sectionIndex, config?.sections]);
 
   useEffect(() => {
     if (sourceType !== SOURCE_TYPES.multimedia) return;
@@ -1814,7 +1836,8 @@ export default function SlideRenderer({
   };
 
   if (sourceType !== SOURCE_TYPES.multimedia) {
-    if (!uri) {
+    const isTemplateSource = sourceType === SOURCE_TYPES.template;
+    if (!uri && !isTemplateSource) {
       return (
         <View style={styles.center}>
           <Text style={{ color: "#fff" }}>No URL Configured</Text>
@@ -1845,7 +1868,12 @@ export default function SlideRenderer({
       >
         <View style={mediaRotateLayerStyle}>
           <WebView
-            source={{ uri }}
+            key={isTemplateSource ? `template-${sectionIndex}-${templateIndex}-${sourceTemplate?.id || ""}` : `url-${sectionIndex}`}
+            source={
+              isTemplateSource
+                ? { html: buildOrderTemplateHtml(sourceTemplate), baseUrl: "https://template.local" }
+                : { uri }
+            }
             style={styles.media}
             javaScriptEnabled
             domStorageEnabled
