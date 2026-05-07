@@ -2176,6 +2176,10 @@ function buildOrderTemplateMarkup(template = {}, { preview = false } = {}) {
     `--tpl-secondary:${escapeHtml(tpl.secondaryColor || "#2695d8")}`,
     `--tpl-accent:${escapeHtml(tpl.accentColor || "#d92736")}`,
     `--tpl-text:${escapeHtml(tpl.textColor || "#ffffff")}`,
+    `--tpl-prep-title-bg:${escapeHtml(tpl.prepTitleBgColor || "rgba(0,0,0,0.28)")}`,
+    `--tpl-ready-title-bg:${escapeHtml(tpl.readyTitleBgColor || "rgba(0,0,0,0.28)")}`,
+    `--tpl-prep-list-bg:${escapeHtml(tpl.prepListBgColor || tpl.panelColor || "#ffffff")}`,
+    `--tpl-ready-list-bg:${escapeHtml(tpl.readyListBgColor || (styleId === "classic" ? "#090909" : tpl.panelColor || "#ffffff"))}`,
     `--tpl-font:${fontSize}px`,
   ].join(";");
 
@@ -3535,7 +3539,13 @@ function renderTemplateSummary(section) {
     return;
   }
   summary.innerHTML = templates
-    .map((template, index) => `<span class="template-chip">${index + 1}. ${escapeHtml(template.name || "Custom Template")}</span>`)
+    .map((template, index) => `
+      <span class="template-chip">
+        <span class="template-chip-name">${index + 1}. ${escapeHtml(template.name || "Custom Template")}</span>
+        <button class="template-chip-icon" type="button" title="Edit template" onclick="editSectionTemplate(${section}, ${index})">Edit</button>
+        <button class="template-chip-icon danger" type="button" title="Remove template" onclick="removeSectionTemplate(${section}, ${index})">x</button>
+      </span>
+    `)
     .join("");
 }
 
@@ -3546,6 +3556,27 @@ function addTemplateToSection(section) {
 function deleteTemplateFromSection(section) {
   setSectionTemplates(section, []);
   showNotice("success", "Templates Removed", `Section ${section} templates removed.`);
+}
+
+function removeSectionTemplate(section, index) {
+  const templates = getSectionTemplates(section);
+  if (!templates[index]) return;
+  templates.splice(index, 1);
+  setSectionTemplates(section, templates);
+}
+
+function editSectionTemplate(section, index) {
+  const templates = getSectionTemplates(section);
+  const template = templates[index];
+  if (!template) return;
+  showTemplateEditor(template, (updated) => {
+    const next = getSectionTemplates(section);
+    next[index] = cloneTemplate({ ...updated, id: template.id || updated.id });
+    setSectionTemplates(section, next);
+  }, {
+    title: template.name || "Edit Template",
+    onDelete: () => removeSectionTemplate(section, index),
+  });
 }
 
 function cloneTemplate(template) {
@@ -3565,6 +3596,90 @@ function getTemplateStyleLabel(layout) {
     split: "Prep Ready Split",
   };
   return labels[String(layout || "")] || "Royal Board";
+}
+
+const TEMPLATE_STYLE_PRESETS = {
+  royal: {
+    backgroundColor: "#130b2c",
+    panelColor: "#fff8df",
+    primaryColor: "#ffd166",
+    secondaryColor: "#58d5ff",
+    accentColor: "#f5b84b",
+    textColor: "#fffaf0",
+    prepTitleBgColor: "#263a63",
+    readyTitleBgColor: "#5b2d78",
+    prepListBgColor: "#f7fbff",
+    readyListBgColor: "#11131f",
+  },
+  executive: {
+    backgroundColor: "#071526",
+    panelColor: "#eef6ff",
+    primaryColor: "#a7f3d0",
+    secondaryColor: "#93c5fd",
+    accentColor: "#facc15",
+    textColor: "#f8fafc",
+    prepTitleBgColor: "#12324d",
+    readyTitleBgColor: "#17443a",
+    prepListBgColor: "#eef6ff",
+    readyListBgColor: "#061018",
+  },
+  glass: {
+    backgroundColor: "#082f49",
+    panelColor: "#f0f9ff",
+    primaryColor: "#67e8f9",
+    secondaryColor: "#c4b5fd",
+    accentColor: "#38bdf8",
+    textColor: "#ecfeff",
+    prepTitleBgColor: "#0f4c75",
+    readyTitleBgColor: "#155e75",
+    prepListBgColor: "#ecfeff",
+    readyListBgColor: "#082f49",
+  },
+  cinema: {
+    backgroundColor: "#211109",
+    panelColor: "#fff7ed",
+    primaryColor: "#facc15",
+    secondaryColor: "#fb923c",
+    accentColor: "#ef4444",
+    textColor: "#fff7ed",
+    prepTitleBgColor: "#4a220d",
+    readyTitleBgColor: "#581c15",
+    prepListBgColor: "#fff7ed",
+    readyListBgColor: "#090909",
+  },
+  classic: {
+    backgroundColor: "#101010",
+    panelColor: "#ffffff",
+    primaryColor: "#f4f72a",
+    secondaryColor: "#2695d8",
+    accentColor: "#d92736",
+    textColor: "#ffffff",
+    prepTitleBgColor: "#202936",
+    readyTitleBgColor: "#202936",
+    prepListBgColor: "#ffffff",
+    readyListBgColor: "#090909",
+  },
+  split: {
+    backgroundColor: "#222222",
+    panelColor: "#ffffff",
+    primaryColor: "#6cc04a",
+    secondaryColor: "#2695d8",
+    accentColor: "#5fb052",
+    textColor: "#ffffff",
+    prepTitleBgColor: "#174a6b",
+    readyTitleBgColor: "#255f25",
+    prepListBgColor: "#ffffff",
+    readyListBgColor: "#ffffff",
+  },
+};
+
+function applyTemplateStylePresetToForm(form, layout) {
+  const preset = TEMPLATE_STYLE_PRESETS[String(layout || "")];
+  if (!form || !preset) return;
+  Object.entries(preset).forEach(([name, value]) => {
+    const input = form.elements?.[name];
+    if (input && "value" in input) input.value = value;
+  });
 }
 
 function showTemplateGallery(section) {
@@ -3678,7 +3793,11 @@ function showTemplateEditor(template, onSave, options = {}) {
           <h2>${escapeHtml(options.title || "Template Editor")}</h2>
           <p class="section-help">Text, colors, background aur optional image/logo edit karein. Image 500KB se kam honi chahiye.</p>
         </div>
-        <button class="btn warning" type="button" data-template-close>Close</button>
+        <div class="template-head-actions">
+          <button class="btn primary" type="submit" form="templateEditorForm">Save Template</button>
+          <button class="btn danger" type="button" data-template-delete>Delete</button>
+          <button class="btn warning" type="button" data-template-close>Close</button>
+        </div>
       </div>
       <div class="template-editor-grid">
         <div class="template-device-preview">
@@ -3728,13 +3847,13 @@ function showTemplateEditor(template, onSave, options = {}) {
             <label>Ready<input name="primaryColor" type="color" value="${escapeHtml(existing.primaryColor || "#f4f72a")}" /></label>
             <label>Prep<input name="secondaryColor" type="color" value="${escapeHtml(existing.secondaryColor || "#2695d8")}" /></label>
             <label>Accent<input name="accentColor" type="color" value="${escapeHtml(existing.accentColor || "#d92736")}" /></label>
+            <label>Left Subtitle BG<input name="prepTitleBgColor" type="color" value="${escapeHtml(existing.prepTitleBgColor || TEMPLATE_STYLE_PRESETS[existing.layout]?.prepTitleBgColor || "#202936")}" /></label>
+            <label>Right Subtitle BG<input name="readyTitleBgColor" type="color" value="${escapeHtml(existing.readyTitleBgColor || TEMPLATE_STYLE_PRESETS[existing.layout]?.readyTitleBgColor || "#202936")}" /></label>
+            <label>Prep Orders BG<input name="prepListBgColor" type="color" value="${escapeHtml(existing.prepListBgColor || TEMPLATE_STYLE_PRESETS[existing.layout]?.prepListBgColor || "#ffffff")}" /></label>
+            <label>Ready Orders BG<input name="readyListBgColor" type="color" value="${escapeHtml(existing.readyListBgColor || TEMPLATE_STYLE_PRESETS[existing.layout]?.readyListBgColor || "#090909")}" /></label>
           </div>
           <label>Number Font Size</label>
           <input name="fontSize" type="range" min="24" max="96" value="${Number(existing.fontSize || 54)}" />
-          <div class="template-editor-actions">
-            <button class="btn primary" type="submit">Save Template</button>
-            <button class="btn danger" type="button" data-template-delete>Delete</button>
-          </div>
         </form>
       </div>
     </div>
@@ -3764,6 +3883,10 @@ function showTemplateEditor(template, onSave, options = {}) {
       primaryColor: String(data.get("primaryColor") || "#f4f72a"),
       secondaryColor: String(data.get("secondaryColor") || "#2695d8"),
       accentColor: String(data.get("accentColor") || "#d92736"),
+      prepTitleBgColor: String(data.get("prepTitleBgColor") || ""),
+      readyTitleBgColor: String(data.get("readyTitleBgColor") || ""),
+      prepListBgColor: String(data.get("prepListBgColor") || ""),
+      readyListBgColor: String(data.get("readyListBgColor") || ""),
       fontSize: Number(data.get("fontSize") || 54),
       imageData,
     };
@@ -3774,7 +3897,12 @@ function showTemplateEditor(template, onSave, options = {}) {
   };
 
   form.addEventListener("input", refreshPreview);
-  form.addEventListener("change", refreshPreview);
+  form.addEventListener("change", (event) => {
+    if (event.target?.name === "layout") {
+      applyTemplateStylePresetToForm(form, event.target.value);
+    }
+    refreshPreview();
+  });
   form.elements.imageFile?.addEventListener("change", (event) => {
     const file = event.target?.files?.[0];
     const status = overlay.querySelector("#templateImageStatus");
@@ -3806,6 +3934,7 @@ function showTemplateEditor(template, onSave, options = {}) {
   });
   overlay.querySelector("[data-template-close]")?.addEventListener("click", () => overlay.remove());
   overlay.querySelector("[data-template-delete]")?.addEventListener("click", () => {
+    options.onDelete?.();
     overlay.remove();
   });
   overlay.addEventListener("click", (event) => {
@@ -4672,6 +4801,8 @@ window.__cmsReloadAccessOverrides = loadAccessOverrides;
 window.addTemplateToSection = addTemplateToSection;
 window.showTemplateEditor = showTemplateEditor;
 window.deleteTemplateFromSection = deleteTemplateFromSection;
+window.removeSectionTemplate = removeSectionTemplate;
+window.editSectionTemplate = editSectionTemplate;
 
   document.addEventListener("DOMContentLoaded", async () => {
   updateViewportHeightVar();

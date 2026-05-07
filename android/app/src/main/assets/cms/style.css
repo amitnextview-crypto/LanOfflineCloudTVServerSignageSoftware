@@ -1060,6 +1060,7 @@ input[type="range"] {
 .template-chip {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   margin: 2px 5px 3px 0;
   padding: 5px 8px;
   border-radius: 999px;
@@ -1068,6 +1069,47 @@ input[type="range"] {
   color: #d8fff8;
   font-size: 12px;
   font-weight: 800;
+}
+
+.template-chip-name {
+  min-width: 0;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-chip-icon {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid rgba(216, 255, 248, 0.28);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.1);
+  color: #d8fff8;
+  cursor: pointer;
+  font-size: 0;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.template-chip-icon::before {
+  content: "E";
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.template-chip-icon.danger::before {
+  content: "x";
+  font-size: 16px;
+}
+
+.template-chip-icon.danger {
+  border-color: rgba(255, 170, 180, 0.34);
+  color: #ffd5dc;
 }
 
 .preview-template-wrap,
@@ -1638,6 +1680,14 @@ input[type="range"] {
   text-shadow: 0 2px 12px rgba(0,0,0,0.38);
 }
 
+.prep-col .tpl-column-title {
+  background: var(--tpl-prep-title-bg);
+}
+
+.ready-col .tpl-column-title {
+  background: var(--tpl-ready-title-bg);
+}
+
 .tpl-column-title span {
   flex: 0 0 auto;
   padding: 0.35em 0.7em;
@@ -1659,6 +1709,18 @@ input[type="range"] {
   align-content: start;
   justify-items: start;
   gap: clamp(7px, 1.1vw, 18px);
+}
+
+.prep-col .tpl-list {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.72), rgba(255,255,255,0.18)),
+    var(--tpl-prep-list-bg);
+}
+
+.ready-col .tpl-list {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.58), rgba(255,255,255,0.08)),
+    var(--tpl-ready-list-bg);
 }
 
 .tpl-item {
@@ -1713,7 +1775,9 @@ input[type="range"] {
 }
 
 .order-template.classic .ready-col .tpl-list {
-  background: linear-gradient(180deg, rgba(12,12,12,0.95), rgba(4,4,4,0.9));
+  background:
+    linear-gradient(180deg, rgba(12,12,12,0.78), rgba(4,4,4,0.78)),
+    var(--tpl-ready-list-bg);
 }
 
 .order-template.style-royal .tpl-screen {
