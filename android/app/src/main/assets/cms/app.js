@@ -2165,10 +2165,12 @@ function buildOrderTemplateMarkup(template = {}, { preview = false } = {}) {
   const prepItems = parseTemplateItems(tpl.prepItems);
   const readyItems = parseTemplateItems(tpl.readyItems);
   const fontSize = Math.max(24, Math.min(96, Number(tpl.fontSize || 54)));
-  const styleId = ["classic", "split", "royal", "glass", "cinema", "executive"].includes(String(tpl.layout || ""))
-    ? String(tpl.layout || "classic")
-    : "classic";
-  const split = styleId === "split" || styleId === "executive";
+  const rawLayout = String(tpl.layout || "classic");
+  const styleId = Object.prototype.hasOwnProperty.call(TEMPLATE_STYLE_PRESETS, rawLayout) ? rawLayout : "classic";
+  const split = [
+    "split", "executive", "dashboard", "luxury", "midnight",
+    "kiosk", "leaderboard", "driveThru", "metro", "premiumCard",
+  ].includes(styleId);
   const style = [
     `--tpl-bg:${escapeHtml(tpl.backgroundColor || "#101010")}`,
     `--tpl-panel:${escapeHtml(tpl.panelColor || "#ffffff")}`,
@@ -3592,10 +3594,45 @@ function getTemplateStyleLabel(layout) {
     executive: "Executive Split",
     glass: "Glass Premium",
     cinema: "Cinema Status",
+    neon: "Neon Night",
+    minimal: "Minimal Light",
+    luxury: "Luxury Gold",
+    token: "Token Counter",
+    dashboard: "Dashboard Pro",
+    poster: "Poster Tall",
+    matrix: "Matrix Queue",
+    sunrise: "Sunrise Cafe",
+    midnight: "Midnight Blue",
+    marble: "Marble Premium",
+    kiosk: "Kiosk Side Hero",
+    leaderboard: "Leaderboard Wide",
+    vertical: "Vertical Ticket",
+    compact: "Compact Grid",
+    magazine: "Magazine Cover",
+    stadium: "Stadium LED",
+    driveThru: "Drive-Thru Lane",
+    metro: "Metro Split",
+    premiumCard: "Premium Cards",
+    ribbon: "Ribbon Header",
     classic: "Classic Board",
     split: "Prep Ready Split",
   };
   return labels[String(layout || "")] || "Royal Board";
+}
+
+function getTemplateStyleSelectOptions(selectedLayout) {
+  const layouts = [
+    "royal", "executive", "glass", "cinema", "neon", "minimal", "luxury", "token",
+    "dashboard", "poster", "matrix", "sunrise", "midnight", "marble",
+    "kiosk", "leaderboard", "vertical", "compact", "magazine", "stadium",
+    "driveThru", "metro", "premiumCard", "ribbon", "classic", "split",
+  ];
+  const selected = String(selectedLayout || "");
+  return layouts
+    .map((layout) =>
+      `<option value="${layout}" ${selected === layout ? "selected" : ""}>${escapeHtml(getTemplateStyleLabel(layout))}</option>`
+    )
+    .join("");
 }
 
 const TEMPLATE_STYLE_PRESETS = {
@@ -3670,6 +3707,246 @@ const TEMPLATE_STYLE_PRESETS = {
     readyTitleBgColor: "#255f25",
     prepListBgColor: "#ffffff",
     readyListBgColor: "#ffffff",
+  },
+  neon: {
+    backgroundColor: "#050018",
+    panelColor: "#0b1026",
+    primaryColor: "#22d3ee",
+    secondaryColor: "#f472b6",
+    accentColor: "#a78bfa",
+    textColor: "#f5f3ff",
+    prepTitleBgColor: "#31135e",
+    readyTitleBgColor: "#083344",
+    prepListBgColor: "#0f172a",
+    readyListBgColor: "#020617",
+  },
+  minimal: {
+    backgroundColor: "#f8fafc",
+    panelColor: "#ffffff",
+    primaryColor: "#0f766e",
+    secondaryColor: "#2563eb",
+    accentColor: "#111827",
+    textColor: "#0f172a",
+    prepTitleBgColor: "#e2e8f0",
+    readyTitleBgColor: "#dbeafe",
+    prepListBgColor: "#ffffff",
+    readyListBgColor: "#f8fafc",
+  },
+  luxury: {
+    backgroundColor: "#140f05",
+    panelColor: "#fff7d6",
+    primaryColor: "#f5c542",
+    secondaryColor: "#d6a94f",
+    accentColor: "#f59e0b",
+    textColor: "#fff8dc",
+    prepTitleBgColor: "#4a3414",
+    readyTitleBgColor: "#6b4514",
+    prepListBgColor: "#fff8dc",
+    readyListBgColor: "#16110a",
+  },
+  token: {
+    backgroundColor: "#062d2d",
+    panelColor: "#ecfeff",
+    primaryColor: "#67e8f9",
+    secondaryColor: "#5eead4",
+    accentColor: "#facc15",
+    textColor: "#ecfeff",
+    prepTitleBgColor: "#115e59",
+    readyTitleBgColor: "#0e7490",
+    prepListBgColor: "#f0fdfa",
+    readyListBgColor: "#083344",
+  },
+  dashboard: {
+    backgroundColor: "#0b1220",
+    panelColor: "#e5e7eb",
+    primaryColor: "#4ade80",
+    secondaryColor: "#60a5fa",
+    accentColor: "#f97316",
+    textColor: "#f8fafc",
+    prepTitleBgColor: "#1e3a8a",
+    readyTitleBgColor: "#166534",
+    prepListBgColor: "#eff6ff",
+    readyListBgColor: "#052e16",
+  },
+  poster: {
+    backgroundColor: "#450a0a",
+    panelColor: "#fff1f2",
+    primaryColor: "#fef08a",
+    secondaryColor: "#fecdd3",
+    accentColor: "#fb7185",
+    textColor: "#fff1f2",
+    prepTitleBgColor: "#9f1239",
+    readyTitleBgColor: "#be123c",
+    prepListBgColor: "#fff1f2",
+    readyListBgColor: "#450a0a",
+  },
+  matrix: {
+    backgroundColor: "#00140d",
+    panelColor: "#dcfce7",
+    primaryColor: "#86efac",
+    secondaryColor: "#22c55e",
+    accentColor: "#bbf7d0",
+    textColor: "#dcfce7",
+    prepTitleBgColor: "#064e3b",
+    readyTitleBgColor: "#14532d",
+    prepListBgColor: "#052e16",
+    readyListBgColor: "#00140d",
+  },
+  sunrise: {
+    backgroundColor: "#431407",
+    panelColor: "#fff7ed",
+    primaryColor: "#fdba74",
+    secondaryColor: "#f9a8d4",
+    accentColor: "#f97316",
+    textColor: "#ffedd5",
+    prepTitleBgColor: "#9a3412",
+    readyTitleBgColor: "#be185d",
+    prepListBgColor: "#fff7ed",
+    readyListBgColor: "#431407",
+  },
+  midnight: {
+    backgroundColor: "#020617",
+    panelColor: "#e0f2fe",
+    primaryColor: "#38bdf8",
+    secondaryColor: "#818cf8",
+    accentColor: "#f8fafc",
+    textColor: "#e0f2fe",
+    prepTitleBgColor: "#1e1b4b",
+    readyTitleBgColor: "#0c4a6e",
+    prepListBgColor: "#eef2ff",
+    readyListBgColor: "#020617",
+  },
+  marble: {
+    backgroundColor: "#1f2937",
+    panelColor: "#f8fafc",
+    primaryColor: "#14b8a6",
+    secondaryColor: "#64748b",
+    accentColor: "#eab308",
+    textColor: "#f8fafc",
+    prepTitleBgColor: "#334155",
+    readyTitleBgColor: "#0f766e",
+    prepListBgColor: "#f8fafc",
+    readyListBgColor: "#111827",
+  },
+  kiosk: {
+    backgroundColor: "#101827",
+    panelColor: "#fef3c7",
+    primaryColor: "#f59e0b",
+    secondaryColor: "#38bdf8",
+    accentColor: "#22c55e",
+    textColor: "#f8fafc",
+    prepTitleBgColor: "#0f3b57",
+    readyTitleBgColor: "#8a3b06",
+    prepListBgColor: "#e0f2fe",
+    readyListBgColor: "#1f1304",
+  },
+  leaderboard: {
+    backgroundColor: "#07111f",
+    panelColor: "#ecfccb",
+    primaryColor: "#bef264",
+    secondaryColor: "#60a5fa",
+    accentColor: "#f43f5e",
+    textColor: "#f8fafc",
+    prepTitleBgColor: "#1d4ed8",
+    readyTitleBgColor: "#3f6212",
+    prepListBgColor: "#eff6ff",
+    readyListBgColor: "#172554",
+  },
+  vertical: {
+    backgroundColor: "#241022",
+    panelColor: "#fff1f2",
+    primaryColor: "#fb7185",
+    secondaryColor: "#fbbf24",
+    accentColor: "#c084fc",
+    textColor: "#fff7ed",
+    prepTitleBgColor: "#92400e",
+    readyTitleBgColor: "#9f1239",
+    prepListBgColor: "#fffbeb",
+    readyListBgColor: "#4a1028",
+  },
+  compact: {
+    backgroundColor: "#0f172a",
+    panelColor: "#e2e8f0",
+    primaryColor: "#2dd4bf",
+    secondaryColor: "#93c5fd",
+    accentColor: "#facc15",
+    textColor: "#f8fafc",
+    prepTitleBgColor: "#1e293b",
+    readyTitleBgColor: "#0f766e",
+    prepListBgColor: "#f8fafc",
+    readyListBgColor: "#042f2e",
+  },
+  magazine: {
+    backgroundColor: "#3b0764",
+    panelColor: "#fae8ff",
+    primaryColor: "#f0abfc",
+    secondaryColor: "#fda4af",
+    accentColor: "#fde047",
+    textColor: "#faf5ff",
+    prepTitleBgColor: "#86198f",
+    readyTitleBgColor: "#be185d",
+    prepListBgColor: "#fae8ff",
+    readyListBgColor: "#581c87",
+  },
+  stadium: {
+    backgroundColor: "#052e16",
+    panelColor: "#f7fee7",
+    primaryColor: "#bef264",
+    secondaryColor: "#5eead4",
+    accentColor: "#f97316",
+    textColor: "#f0fdf4",
+    prepTitleBgColor: "#115e59",
+    readyTitleBgColor: "#166534",
+    prepListBgColor: "#ecfdf5",
+    readyListBgColor: "#022c22",
+  },
+  driveThru: {
+    backgroundColor: "#1c1917",
+    panelColor: "#ffedd5",
+    primaryColor: "#fb923c",
+    secondaryColor: "#facc15",
+    accentColor: "#ef4444",
+    textColor: "#fff7ed",
+    prepTitleBgColor: "#854d0e",
+    readyTitleBgColor: "#c2410c",
+    prepListBgColor: "#fef3c7",
+    readyListBgColor: "#431407",
+  },
+  metro: {
+    backgroundColor: "#111827",
+    panelColor: "#f9fafb",
+    primaryColor: "#dc2626",
+    secondaryColor: "#2563eb",
+    accentColor: "#111827",
+    textColor: "#f9fafb",
+    prepTitleBgColor: "#1d4ed8",
+    readyTitleBgColor: "#b91c1c",
+    prepListBgColor: "#eff6ff",
+    readyListBgColor: "#fee2e2",
+  },
+  premiumCard: {
+    backgroundColor: "#0c0a09",
+    panelColor: "#f5f5f4",
+    primaryColor: "#d4d4d8",
+    secondaryColor: "#a1a1aa",
+    accentColor: "#ca8a04",
+    textColor: "#fafaf9",
+    prepTitleBgColor: "#3f3f46",
+    readyTitleBgColor: "#713f12",
+    prepListBgColor: "#fafaf9",
+    readyListBgColor: "#18181b",
+  },
+  ribbon: {
+    backgroundColor: "#082f49",
+    panelColor: "#f0f9ff",
+    primaryColor: "#7dd3fc",
+    secondaryColor: "#38bdf8",
+    accentColor: "#f472b6",
+    textColor: "#f0f9ff",
+    prepTitleBgColor: "#075985",
+    readyTitleBgColor: "#be185d",
+    prepListBgColor: "#e0f2fe",
+    readyListBgColor: "#0c4a6e",
   },
 };
 
@@ -3810,12 +4087,7 @@ function showTemplateEditor(template, onSave, options = {}) {
           <input name="name" type="text" value="${escapeHtml(existing.name || "")}" />
           <label>Style</label>
           <select name="layout">
-            <option value="royal" ${existing.layout === "royal" ? "selected" : ""}>Royal 3D Board</option>
-            <option value="executive" ${existing.layout === "executive" ? "selected" : ""}>Executive Split</option>
-            <option value="glass" ${existing.layout === "glass" ? "selected" : ""}>Glass Premium</option>
-            <option value="cinema" ${existing.layout === "cinema" ? "selected" : ""}>Cinema Status</option>
-            <option value="classic" ${existing.layout === "classic" ? "selected" : ""}>Classic Board</option>
-            <option value="split" ${existing.layout === "split" ? "selected" : ""}>Prep Ready Split</option>
+            ${getTemplateStyleSelectOptions(existing.layout)}
           </select>
           <div class="template-field-pair">
             <label>Brand Mark / Logo Text<input name="brandText" type="text" value="${escapeHtml(existing.brandText || String(existing.name || "T").slice(0, 1))}" /></label>

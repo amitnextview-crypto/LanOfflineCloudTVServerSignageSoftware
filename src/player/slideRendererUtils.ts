@@ -87,10 +87,14 @@ export function buildOrderTemplateHtml(template: any = {}) {
   const prepItems = parseTemplateItems(tpl.prepItems);
   const readyItems = parseTemplateItems(tpl.readyItems);
   const fontSize = Math.max(24, Math.min(96, Number(tpl.fontSize || 54)));
-  const styleId = ["classic", "split", "royal", "glass", "cinema", "executive"].includes(String(tpl.layout || ""))
+  const styleId = [
+    "classic", "split", "royal", "glass", "cinema", "executive",
+    "neon", "minimal", "luxury", "token", "dashboard", "poster",
+    "matrix", "sunrise", "midnight", "marble",
+  ].includes(String(tpl.layout || ""))
     ? String(tpl.layout || "classic")
     : "classic";
-  const split = styleId === "split" || styleId === "executive";
+  const split = ["split", "executive", "dashboard", "luxury", "midnight"].includes(styleId);
   const prepHtml = prepItems.map((item) => `<div class="item prep">${escapeHtml(item)}</div>`).join("");
   const readyHtml = readyItems
     .map((item, index) => `<div class="item ready ${index === 0 ? "hero-ready" : ""}">${escapeHtml(item)}</div>`)
@@ -126,6 +130,16 @@ body{font-family:Arial,"Segoe UI",sans-serif;color:${escapeHtml(tpl.textColor)}}
 .item{min-width:min(12ch,100%);width:max-content;max-width:100%;min-height:1.22em;display:inline-flex;align-items:center;justify-content:center;border-radius:clamp(8px,.8vw,14px);padding:.18em .48em;background:linear-gradient(180deg,rgba(255,255,255,.82),rgba(255,255,255,.32));box-shadow:0 8px 18px rgba(0,0,0,.12);font-size:clamp(22px,4.8vw,${fontSize}px);line-height:1;font-weight:900;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.prep{color:${escapeHtml(tpl.secondaryColor)}}.ready{color:${escapeHtml(tpl.primaryColor)}}.hero-ready{min-width:min(7ch,100%);padding:.14em .42em;font-size:clamp(38px,8vw,${Math.round(fontSize * 1.85)}px);text-align:center;margin:2% 0 4%}
 .footer{min-height:clamp(46px,7vh,94px);padding:clamp(10px,1.45vw,24px) clamp(16px,3vw,54px);display:flex;justify-content:space-between;align-items:center;gap:clamp(10px,1.4vw,24px);background:linear-gradient(180deg,rgba(0,0,0,.08),rgba(0,0,0,.72));border-top:1px solid rgba(255,255,255,.12);font-size:clamp(12px,1.45vw,28px)}.footer strong{flex:0 0 auto;color:#0b0d10;background:linear-gradient(135deg,#fff,${escapeHtml(tpl.primaryColor)});border-radius:999px;padding:.38em .82em;box-shadow:0 8px 18px rgba(0,0,0,.25)}.footer em{min-width:0;flex:1 1 auto;font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mark{width:42px;height:42px;border-radius:7px;background:${escapeHtml(tpl.accentColor)}}.empty{color:#667;font-weight:800}
 .royal .screen{background:radial-gradient(circle at 52% -12%,rgba(255,255,255,.18),transparent 28%),linear-gradient(135deg,#130b2c,#071526 42%,#05070f)}.glass .col{background:rgba(255,255,255,.14)}.cinema .screen{background:linear-gradient(135deg,#090909,#211109 48%,#050505)}
+.neon .screen{background:radial-gradient(circle at 20% 8%,rgba(244,114,182,.26),transparent 30%),radial-gradient(circle at 84% 72%,rgba(34,211,238,.22),transparent 34%),linear-gradient(135deg,#050018,#0f172a 56%,#020617)}.neon .col{border:1px solid rgba(34,211,238,.35);box-shadow:0 0 28px rgba(34,211,238,.18),0 28px 56px rgba(0,0,0,.42)}
+.minimal .screen{background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(15,23,42,.08)}.minimal .top,.minimal .footer{background:rgba(255,255,255,.72);color:#0f172a}.minimal .col{box-shadow:0 12px 30px rgba(15,23,42,.12)}
+.luxury .body{grid-template-columns:minmax(0,.82fr) minmax(0,1.18fr)}.luxury .readyCol{transform:scale(1.035);box-shadow:0 36px 74px rgba(245,158,11,.2),0 26px 54px rgba(0,0,0,.4)}
+.token .body{grid-template-columns:minmax(0,.72fr) minmax(0,1.28fr)}.token .item{border-radius:999px}.token .hero-ready{width:100%}
+.dashboard .body{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}.dashboard .col{border-radius:8px}.dashboard .list{grid-template-columns:repeat(2,minmax(0,max-content));align-content:start;align-items:start}
+.poster .body{grid-template-columns:1fr;gap:clamp(16px,2.4vw,38px)}.poster .readyCol{min-height:58%}.poster .readyCol .list{justify-items:center}.poster .hero-ready{font-size:clamp(64px,11vw,${Math.round(fontSize * 2.15)}px)}
+.matrix .screen{background:linear-gradient(90deg,rgba(134,239,172,.08) 1px,transparent 1px),linear-gradient(0deg,rgba(134,239,172,.08) 1px,transparent 1px),#00140d;background-size:44px 44px}.matrix .item{font-family:Consolas,"Courier New",monospace;border-radius:4px}
+.sunrise .screen{background:radial-gradient(circle at 50% 12%,rgba(253,186,116,.34),transparent 30%),linear-gradient(150deg,#431407,#9a3412 46%,#be185d)}.sunrise .body{grid-template-columns:minmax(0,1fr) minmax(0,1fr);transform:rotate(-.2deg)}
+.midnight .body{grid-template-columns:minmax(0,1.16fr) minmax(0,.84fr)}.midnight .prepCol{transform:translateY(-.8%)}.midnight .readyCol{transform:translateY(1.2%)}
+.marble .screen{background:linear-gradient(120deg,rgba(255,255,255,.13),transparent 18%,rgba(255,255,255,.08) 38%,transparent 62%),linear-gradient(135deg,#1f2937,#334155)}.marble .col{border-radius:2px;box-shadow:0 26px 54px rgba(0,0,0,.28)}
 @media (max-aspect-ratio: 4/3){.top{grid-template-columns:auto minmax(0,1fr) auto;padding:clamp(16px,3.2vw,44px) clamp(18px,4vw,58px)}.centerTitle{font-size:clamp(34px,7.2vw,96px)}.body,.split .body{grid-template-columns:1fr;gap:clamp(18px,3.2vw,42px);padding:clamp(18px,4vw,58px)}.title{font-size:clamp(20px,3.2vw,42px)}.list{gap:clamp(12px,2vw,26px)}.item{font-size:clamp(38px,8.6vw,${fontSize}px);padding:.2em .52em}.hero-ready{font-size:clamp(56px,13vw,${Math.round(fontSize * 1.85)}px)}.footer em{white-space:normal}}
 </style>
 </head>
