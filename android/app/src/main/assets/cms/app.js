@@ -17,8 +17,8 @@ const MULTI_DEVICE_RETRY_DELAY_MS = 1800;
 const MULTI_DEVICE_UPLOAD_CONCURRENCY = 6;
 const UPLOAD_TIMEOUT_STORAGE_KEY = "cmsUploadTimeoutMs";
 const FAST_UPLOAD_SKIP_DUPLICATE_BYTES = 700 * 1024 * 1024;
-const CHUNK_UPLOAD_SIZE_BYTES = 16 * 1024 * 1024;
-const CHUNK_UPLOAD_PARALLEL_PARTS = 4;
+const CHUNK_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024;
+const CHUNK_UPLOAD_PARALLEL_PARTS = 6;
 
 const GRID3_LAYOUTS = [
   { id: "stack-v", label: "Stack Vertical" },
@@ -97,10 +97,14 @@ let latestDeviceStatusList = [];
 let isDeviceDashboardOpen = false;
 let pendingUploadSelections = { 1: [], 2: [], 3: [] };
 const SELECTED_ORIGINS_STORAGE_KEY = "tvCmsSelectedOrigins";
+const CMS_FORM_DRAFT_STORAGE_KEY = "tvCmsFormDraftV2";
 const seenApkUpdateSuccessNotices = new Set();
 let currentDeviceMap = new Map();
 let selectedDeviceOrigins = new Set(loadStoredSelectedOrigins());
 let cmsAccessOverrides = {};
+let cmsFormDirty = false;
+let cmsFormHydrating = false;
+let cmsDraftRestoreChecked = false;
 const IS_TV_COMPACT_MODE = new URLSearchParams(window.location.search).get("tv") === "1";
 const DEVICE_SCAN_PORTS = (() => {
   const currentPort = Number(window.location.port || "8080") || 8080;
@@ -809,6 +813,7 @@ function renderDeviceChecklist() {
 async function handleDeviceSelectionChanged() {
   syncHiddenDeviceSelect();
   persistSelectedOrigins();
+  persistCmsFormDraft();
   renderDeviceChecklist();
   renderHealthSummary(latestDeviceStatusList);
   renderDeviceAlerts(latestDeviceStatusList);
@@ -1147,6 +1152,7 @@ function captureUploadSelection(section) {
     [safeSection]: files,
   };
   updateUploadSelectionStatus(safeSection);
+  markCmsFormDirty();
 }
 
 function clearUploadSelection(section) {
@@ -1160,6 +1166,7 @@ function clearUploadSelection(section) {
     [safeSection]: [],
   };
   updateUploadSelectionStatus(safeSection);
+  markCmsFormDirty();
 }
 
 async function clearUnusedSectionsForLayout(origins = [], layout = "fullscreen") {
@@ -3032,6 +3039,130 @@ function buildConfigFromForm() {
   };
 }
 
+function setFormValue(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.value = value;
+}
+
+function hasPendingUploadFiles() {
+  return Object.values(pendingUploadSelections || {}).some((files) => Array.isArray(files) && files.length > 0);
+}
+
+function isCmsFormElement(element) {
+  if (!(element instanceof HTMLElement)) return false;
+  return !!element.closest(
+    "#uploadSections, #deviceChecklist, #deviceSelect, #layout, #gridRatio, .settings-card, .section-panel, .template-tools"
+  );
+}
+
+function isCmsEditInProgress() {
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  return cmsFormDirty || hasPendingUploadFiles() || isCmsFormElement(active);
+}
+
+function persistCmsFormDraft() {
+  if (cmsFormHydrating) return;
+  try {
+    const config = buildConfigFromForm();
+    window.localStorage.setItem(
+      CMS_FORM_DRAFT_STORAGE_KEY,
+      JSON.stringify({
+        config,
+        selectedOrigins: Array.from(selectedDeviceOrigins).filter(Boolean),
+        savedAt: Date.now(),
+      })
+    );
+  } catch (_e) {
+  }
+}
+
+function clearCmsFormDraft() {
+  try {
+    window.localStorage.removeItem(CMS_FORM_DRAFT_STORAGE_KEY);
+  } catch (_e) {
+  }
+}
+
+function markCmsFormDirty() {
+  if (cmsFormHydrating) return;
+  cmsFormDirty = true;
+  try {
+    currentConfig = buildConfigFromForm();
+    persistCmsFormDraft();
+  } catch (_e) {
+  }
+}
+
+function restoreCmsFormDraftIfAvailable() {
+  if (cmsDraftRestoreChecked) return false;
+  cmsDraftRestoreChecked = true;
+  try {
+    const raw = window.localStorage.getItem(CMS_FORM_DRAFT_STORAGE_KEY);
+    if (!raw) return false;
+    const draft = JSON.parse(raw);
+    if (!draft || typeof draft !== "object" || !draft.config) return false;
+    if (Array.isArray(draft.selectedOrigins) && draft.selectedOrigins.length) {
+      selectedDeviceOrigins = new Set(draft.selectedOrigins.map((value) => normalizeOrigin(value)).filter(Boolean));
+      syncHiddenDeviceSelect();
+      persistSelectedOrigins();
+      renderDeviceChecklist();
+    }
+    applyConfigToForm(draft.config);
+    cmsFormDirty = true;
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
+function applyConfigToForm(config = {}) {
+  cmsFormHydrating = true;
+  try {
+    setFormValue("orientation", config.orientation || "horizontal");
+    setFormValue("layout", config.layout || "fullscreen");
+    setFormValue("animation", config.animation || "slide");
+
+    setFormValue("dir1", config.sections?.[0]?.slideDirection || "left");
+    setFormValue("dir2", config.sections?.[1]?.slideDirection || "left");
+    setFormValue("dir3", config.sections?.[2]?.slideDirection || "left");
+
+    setFormValue("duration1", config.sections?.[0]?.slideDuration || 7);
+    setFormValue("duration2", config.sections?.[1]?.slideDuration || 13);
+    setFormValue("duration3", config.sections?.[2]?.slideDuration || 19);
+
+    setFormValue("tickerText", config.ticker?.text || "Breaking News: NextView Premium Product New Update Available!");
+    setFormValue("tickerFontSize", config.ticker?.fontSize || 24);
+    setFormValue("tickerPosition", config.ticker?.position || "bottom");
+    setFormValue("tickerColor", config.ticker?.color || "#ffffff");
+    setFormValue("tickerBgColor", config.ticker?.bgColor || "#000000");
+    setFormValue("tickerSpeed", config.ticker?.speed ?? 6);
+    setFormValue("videoCacheMB", config.cache?.videoMB || 2048);
+    setScheduleToForm(config.schedule);
+
+    selectedGrid3Layout = config.grid3Layout || "stack-v";
+    selectedGridRatio = config.gridRatio || "1:1:1";
+    currentConfig = {
+      ...config,
+      grid3Layout: selectedGrid3Layout,
+      gridRatio: selectedGridRatio,
+    };
+    updateGridRatioOptions();
+    renderGrid3LayoutOptions();
+    renderUploadSections();
+    for (let i = 1; i <= 3; i++) {
+      const sectionConfig = config.sections?.[i - 1] || {};
+      const typeEl = document.getElementById(`sourceType${i}`);
+      const urlEl = document.getElementById(`sourceUrl${i}`);
+      if (typeEl) typeEl.value = normalizeSectionSourceType(sectionConfig.sourceType);
+      if (urlEl) urlEl.value = sectionConfig.sourceUrl || "";
+      updateSectionUploadMode(i);
+    }
+    updateSectionVisibility();
+  } finally {
+    cmsFormHydrating = false;
+  }
+}
+
 async function loadPreviewMedia(deviceId) {
   try {
     const targetOrigin = normalizeOrigin(deviceId) || getCurrentOrigin();
@@ -3314,6 +3445,8 @@ function selectDeviceFromDashboard(deviceValue) {
   if (!currentDeviceMap.has(deviceValue)) return;
   selectedDeviceOrigins = new Set([deviceValue]);
   syncHiddenDeviceSelect();
+  persistSelectedOrigins();
+  persistCmsFormDraft();
   renderDeviceChecklist();
   loadConfig();
   renderHealthSummary(latestDeviceStatusList);
@@ -3498,12 +3631,12 @@ function startAlertsPolling() {
 
 function onSectionSourceChange(section) {
   updateSectionUploadMode(section);
-  currentConfig = buildConfigFromForm();
+  markCmsFormDirty();
   renderScreenPreview();
 }
 
 function onSectionSourceUrlInput() {
-  currentConfig = buildConfigFromForm();
+  markCmsFormDirty();
   renderScreenPreview();
 }
 
@@ -3529,6 +3662,7 @@ function setSectionTemplates(section, templates) {
   if (typeEl) typeEl.value = selected.length ? SECTION_SOURCE_TYPES.template : SECTION_SOURCE_TYPES.multimedia;
   updateSectionUploadMode(section);
   renderTemplateSummary(section);
+  markCmsFormDirty();
   renderScreenPreview();
 }
 
@@ -4253,15 +4387,15 @@ function updateSectionUploadMode(section) {
 function renderUploadSections() {
   const layout = document.getElementById("layout").value;
   const container = document.getElementById("uploadSections");
-  container.innerHTML = "";
 
   const count = sectionCount(layout);
   for (let i = count + 1; i <= 3; i += 1) {
     pendingUploadSelections[i] = [];
   }
 
+  const markup = [];
   for (let i = 1; i <= count; i++) {
-    container.innerHTML += `
+    markup.push(`
         <div class="section-panel upload-section-card">
             <h3>Section ${i}</h3>
             <div class="source-controls source-controls-stacked">
@@ -4318,7 +4452,11 @@ function renderUploadSections() {
             `
         }
       </div>
-    `;
+    `);
+  }
+  container.innerHTML = markup.join("");
+
+  for (let i = 1; i <= count; i++) {
     if (!IS_TV_COMPACT_MODE) {
       const input = document.getElementById(`media${i}`);
       if (input) {
@@ -4418,6 +4556,7 @@ function selectGrid3Layout(layoutId) {
   updateGridRatioOptions();
   if (currentConfig) currentConfig.gridRatio = selectedGridRatio;
   renderGrid3LayoutOptions();
+  markCmsFormDirty();
   renderScreenPreview();
 }
 
@@ -4758,55 +4897,24 @@ async function uploadMedia(section) {
   }
 }
 
-async function loadConfig() {
+async function loadConfig(options = {}) {
   const targetDevice = getPrimaryOrigin();
   const res = await fetch(`${targetDevice}/config?ts=${Date.now()}`);
   const config = await res.json();
 
-  document.getElementById("orientation").value = config.orientation || "horizontal";
-  document.getElementById("layout").value = config.layout || "fullscreen";
-  document.getElementById("animation").value = config.animation || "slide";
-
-  document.getElementById("dir1").value = config.sections?.[0]?.slideDirection || "left";
-  document.getElementById("dir2").value = config.sections?.[1]?.slideDirection || "left";
-  document.getElementById("dir3").value = config.sections?.[2]?.slideDirection || "left";
-
-  document.getElementById("duration1").value = config.sections?.[0]?.slideDuration || 7;
-  document.getElementById("duration2").value = config.sections?.[1]?.slideDuration || 13;
-  document.getElementById("duration3").value = config.sections?.[2]?.slideDuration || 19;
-
-  document.getElementById("tickerText").value =
-    config.ticker?.text || "Breaking News: NextView Premium Product New Update Available!";
-  document.getElementById("tickerFontSize").value = config.ticker?.fontSize || 24;
-  document.getElementById("tickerPosition").value = config.ticker?.position || "bottom";
-  document.getElementById("tickerColor").value = config.ticker?.color || "#ffffff";
-  document.getElementById("tickerBgColor").value = config.ticker?.bgColor || "#000000";
-  document.getElementById("tickerSpeed").value = config.ticker?.speed ?? 6;
-  document.getElementById("videoCacheMB").value = config.cache?.videoMB || 2048;
-  setScheduleToForm(config.schedule);
-
-  selectedGrid3Layout = config.grid3Layout || "stack-v";
-  selectedGridRatio = config.gridRatio || "1:1:1";
-  currentConfig = {
-    ...config,
-    grid3Layout: selectedGrid3Layout,
-    gridRatio: selectedGridRatio,
-  };
-  updateGridRatioOptions();
-  renderGrid3LayoutOptions();
-  renderUploadSections();
-  for (let i = 1; i <= 3; i++) {
-    const sectionConfig = config.sections?.[i - 1] || {};
-    const typeEl = document.getElementById(`sourceType${i}`);
-    const urlEl = document.getElementById(`sourceUrl${i}`);
-    if (typeEl) typeEl.value = normalizeSectionSourceType(sectionConfig.sourceType);
-    if (urlEl) urlEl.value = sectionConfig.sourceUrl || "";
-    updateSectionUploadMode(i);
+  if (!options.force && cmsDraftRestoreChecked && isCmsEditInProgress()) {
+    loadPreviewMedia(targetDevice)
+      .then(() => renderScreenPreview())
+      .catch(() => {});
+    return config;
   }
-  updateSectionVisibility();
+
+  applyConfigToForm(config);
+  restoreCmsFormDraftIfAvailable();
   loadPreviewMedia(targetDevice)
     .then(() => renderScreenPreview())
     .catch(() => {});
+  return config;
 }
 
 async function saveConfig() {
@@ -4862,6 +4970,8 @@ async function saveConfig() {
 
     updateUploadProgress(92, "Applying settings instantly on selected TVs...");
     clearUnusedSectionsForLayout(targetDevices, config.layout || "fullscreen").catch(() => {});
+    cmsFormDirty = false;
+    clearCmsFormDraft();
     updateUploadProgress(100, "Configuration applied successfully.");
     showNotice("success", "Settings Saved", "Configuration has been applied successfully.", 2200);
     if (window.ReactNativeWebView) {
@@ -5096,6 +5206,9 @@ window.editSectionTemplate = editSectionTemplate;
   await loadDevices();
   if (getSelectedOrigins().length) {
     await loadConfig();
+  } else {
+    restoreCmsFormDraftIfAvailable();
+    renderScreenPreview();
   }
   startPreviewPolling();
   startAlertsPolling();
@@ -5109,6 +5222,7 @@ window.editSectionTemplate = editSectionTemplate;
     currentConfig.gridRatio = selectedGridRatio;
     renderUploadSections();
     updateSectionVisibility();
+    markCmsFormDirty();
   });
 
   document.getElementById("deviceSelect").addEventListener("change", async () => {
@@ -5120,21 +5234,23 @@ window.editSectionTemplate = editSectionTemplate;
   });
   document.getElementById("uploadTimeoutMinutes")?.addEventListener("change", (event) => {
     setUploadTimeoutMinutes(event?.target?.value);
+    markCmsFormDirty();
   });
   document.getElementById("gridRatio").addEventListener("change", (e) => {
     selectedGridRatio = e.target.value;
     if (currentConfig) currentConfig.gridRatio = selectedGridRatio;
     renderGrid3LayoutOptions();
+    markCmsFormDirty();
     renderScreenPreview();
   });
   document.getElementById("scheduleEnabled").addEventListener("change", () => {
     const fields = document.getElementById("scheduleFields");
     if (fields) fields.style.opacity = document.getElementById("scheduleEnabled").checked ? "1" : "0.55";
-    currentConfig = buildConfigFromForm();
+    markCmsFormDirty();
   });
   document.getElementById("scheduleFallbackMode").addEventListener("change", () => {
     updateScheduleFallbackVisibility();
-    currentConfig = buildConfigFromForm();
+    markCmsFormDirty();
   });
 
   const previewLinkedFields = [
@@ -5163,15 +5279,23 @@ window.editSectionTemplate = editSectionTemplate;
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener("change", () => {
-      currentConfig = buildConfigFromForm();
+      markCmsFormDirty();
       renderScreenPreview();
     });
   });
 
   Array.from(document.querySelectorAll(".schedule-day")).forEach((el) => {
     el.addEventListener("change", () => {
-      currentConfig = buildConfigFromForm();
+      markCmsFormDirty();
     });
+  });
+
+  document.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) return;
+    if (target.type === "file") return;
+    if (!isCmsFormElement(target)) return;
+    markCmsFormDirty();
   });
 
   document.addEventListener("keydown", (event) => {

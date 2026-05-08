@@ -56,7 +56,12 @@ import {
   refreshUsbState,
   subscribeUsbState,
 } from "../services/usbManagerModule";
-import { ensureUsbMediaReadPermissions } from "../services/storagePermissionService";
+import {
+  getSpecialAppPermissionStatus,
+  ensureUsbMediaReadPermissions,
+  openOverlayPermissionSettings,
+  openNextMissingSpecialPermission,
+} from "../services/storagePermissionService";
 
 let socket: Socket | null = null;
 const USE_EMBEDDED_CMS = true;
@@ -80,6 +85,7 @@ const LICENSE_INIT_RETRY_COUNT = 5;
 const LICENSE_INIT_RETRY_DELAY_MS = 1200;
 const APK_UPDATE_PENDING_KEY = "apk_update_pending_v1";
 const APK_UPDATE_PENDING_MAX_AGE_MS = 1000 * 60 * 60;
+const SPECIAL_PERMISSION_FLOW_KEY = "special_permission_flow_handled_v1";
 const CACHE_GUARD_INTERVAL_MS = 120000;
 const CACHE_MIN_FREE_BYTES = 1024 * 1024 * 1024;
 const SMALL_CACHE_BLOCK_BYTES = 30 * 1024 * 1024;
@@ -268,6 +274,12 @@ export default function App() {
   const adminOpenedByBackRef = useRef(false);
   const sourceManagerRef = useRef(new SourceManager());
   const playbackControllerRef = useRef(new PlaybackController());
+  const specialPermissionPromptInFlightRef = useRef(false);
+  const specialPermissionHandledRef = useRef({
+    manageAllFiles: false,
+    overlay: false,
+  });
+  const specialPermissionActivePromptRef = useRef<"" | "manageAllFiles" | "overlay">("");
 
   const openAdminPanel = (view: "access" | "cms", options: { openedByBack?: boolean } = {}) => {
     setAdminInitialView(view);
@@ -831,6 +843,112 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!bootReady) return;
+    let mounted = true;
+    let loaded = false;
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const persistHandled = async () => {
+      try {
+        await AsyncStorage.setItem(
+          SPECIAL_PERMISSION_FLOW_KEY,
+          JSON.stringify(specialPermissionHandledRef.current)
+        );
+      } catch {
+      }
+    };
+
+    const markHandledFromStatus = (returnedFrom: "" | "manageAllFiles" | "overlay" = "") => {
+      const status = getSpecialAppPermissionStatus();
+      let changed = false;
+
+      if (status.manageAllFiles || returnedFrom === "manageAllFiles") {
+        if (!specialPermissionHandledRef.current.manageAllFiles) {
+          specialPermissionHandledRef.current.manageAllFiles = true;
+          changed = true;
+        }
+      }
+      if (status.overlay || returnedFrom === "overlay") {
+        if (!specialPermissionHandledRef.current.overlay) {
+          specialPermissionHandledRef.current.overlay = true;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        void persistHandled();
+      }
+
+      return status;
+    };
+
+    const promptMissingSpecialPermission = () => {
+      if (!loaded || !mounted) return;
+      if (specialPermissionPromptInFlightRef.current) return;
+      const status = markHandledFromStatus();
+      if (
+        (status.manageAllFiles || specialPermissionHandledRef.current.manageAllFiles) &&
+        (status.overlay || specialPermissionHandledRef.current.overlay)
+      ) {
+        return;
+      }
+
+      specialPermissionPromptInFlightRef.current = true;
+      setTimeout(() => {
+        try {
+          if (!status.manageAllFiles && !specialPermissionHandledRef.current.manageAllFiles) {
+            specialPermissionActivePromptRef.current = "manageAllFiles";
+            openNextMissingSpecialPermission(0);
+          } else if (!status.overlay && !specialPermissionHandledRef.current.overlay) {
+            specialPermissionActivePromptRef.current = "overlay";
+            openOverlayPermissionSettings();
+          } else if (mounted) {
+            specialPermissionPromptInFlightRef.current = false;
+          }
+        } catch {
+          specialPermissionPromptInFlightRef.current = false;
+        }
+      }, 500);
+    };
+
+    const loadHandledState = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(SPECIAL_PERMISSION_FLOW_KEY);
+        const parsed = JSON.parse(String(raw || "{}"));
+        specialPermissionHandledRef.current = {
+          manageAllFiles: !!parsed?.manageAllFiles,
+          overlay: !!parsed?.overlay,
+        };
+      } catch {
+      }
+      loaded = true;
+      markHandledFromStatus();
+      promptMissingSpecialPermission();
+    };
+
+    void loadHandledState();
+
+    const appStateSub = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        if (settleTimer) clearTimeout(settleTimer);
+        settleTimer = setTimeout(() => {
+          const returnedFrom = specialPermissionActivePromptRef.current;
+          specialPermissionActivePromptRef.current = "";
+          specialPermissionPromptInFlightRef.current = false;
+          markHandledFromStatus(returnedFrom);
+          promptMissingSpecialPermission();
+        }, 1200);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      if (settleTimer) clearTimeout(settleTimer);
+      appStateSub.remove();
+    };
+  }, [bootReady]);
+
+  useEffect(() => {
     const nativeDeviceModule = (NativeModules as any)?.DeviceIdModule;
     if (!nativeDeviceModule) return;
     const emitter = new NativeEventEmitter(nativeDeviceModule);
@@ -870,7 +988,7 @@ export default function App() {
           playbackControllerRef.current.playInstantStream({
             name: String(payload?.name || "streaming-upload.mp4"),
             originalName: String(payload?.name || "streaming-upload.mp4"),
-            section: 1,
+            section,
             url: streamUrl || playbackUri,
             remoteUrl: playbackUri,
             localPath: String(payload?.localPath || ""),

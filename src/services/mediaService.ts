@@ -1172,7 +1172,8 @@ export async function getMediaFiles(sectionIndex = 0) {
   const sectionNo = sectionIndex + 1;
 
   if (playbackOverride) {
-    if (sectionNo !== 1) return [];
+    const overrideSection = Math.max(1, Number(playbackOverride.items?.[0]?.section || 1));
+    if (sectionNo !== overrideSection) return [];
     return playbackOverride.items;
   }
 

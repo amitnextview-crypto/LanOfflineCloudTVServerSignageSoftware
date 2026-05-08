@@ -26,6 +26,7 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".MainApplication"
@@ -71,13 +72,14 @@
     android:name=".BootReceiver"
     android:enabled="true"
     android:exported="true"
-    android:directBootAware="true"
-    android:permission="android.permission.RECEIVE_BOOT_COMPLETED">
+    android:directBootAware="true">
 
     <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED"/>
         <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
         <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+        <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+        <action android:name="android.intent.action.REBOOT"/>
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
     </intent-filter>
 </receiver>

@@ -943,6 +943,36 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
         return output.toByteArray();
     }
 
+    private void writeRequestBodyToFile(IHTTPSession session, File target, long offset, long expectedBytes) throws IOException {
+        Map<String, String> headers = session.getHeaders();
+        long contentLength = safeLong(headers == null ? null : headers.get("content-length"), 0L);
+        if (contentLength != expectedBytes) {
+            throw new IOException("chunk-size-mismatch");
+        }
+        File parent = target.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Unable to prepare upload directory.");
+        }
+        InputStream input = session.getInputStream();
+        RandomAccessFile raf = new RandomAccessFile(target, "rw");
+        byte[] buffer = new byte[256 * 1024];
+        long remaining = expectedBytes;
+        try {
+            raf.seek(offset);
+            while (remaining > 0) {
+                int read = input.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+                if (read <= 0) break;
+                raf.write(buffer, 0, read);
+                remaining -= read;
+            }
+        } finally {
+            raf.close();
+        }
+        if (remaining != 0L) {
+            throw new IOException("chunk-size-mismatch");
+        }
+    }
+
     private void emitLocalMediaUpdated(int section, JSONArray files) throws Exception {
         long syncAt = System.currentTimeMillis();
         JSONObject timeline = new JSONObject();
@@ -1070,8 +1100,10 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
         long size = fileMeta.optLong("size", 0L);
         long offset = (long) chunkIndex * (long) chunkSize;
         long expected = Math.max(0L, Math.min(size, offset + chunkSize) - offset);
-        byte[] body = readRequestBytes(session);
-        if ((long) body.length != expected) {
+        File target = new File(sessionDir, fileMeta.optString("storedName", "media.bin"));
+        try {
+            writeRequestBodyToFile(session, target, offset, expected);
+        } catch (IOException io) {
             return withCors(newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json", "{\"success\":false,\"error\":\"chunk-size-mismatch\"}"));
         }
 
@@ -1080,14 +1112,6 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
             fileMeta = findChunkFile(manifest, fileIndex);
             if (fileMeta == null) {
                 return withCors(newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json", "{\"success\":false,\"error\":\"upload-file-not-found\"}"));
-            }
-            File target = new File(sessionDir, fileMeta.optString("storedName", "media.bin"));
-            RandomAccessFile raf = new RandomAccessFile(target, "rw");
-            try {
-                raf.seek(offset);
-                raf.write(body);
-            } finally {
-                raf.close();
             }
 
             JSONArray received = fileMeta.optJSONArray("received");
@@ -1957,6 +1981,14 @@ public final class EmbeddedCmsServer extends NanoHTTPD {
     private int safeInt(String raw, int fallback) {
         try {
             return Integer.parseInt(String.valueOf(raw == null ? "" : raw).trim());
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private long safeLong(String raw, long fallback) {
+        try {
+            return Long.parseLong(String.valueOf(raw == null ? "" : raw).trim());
         } catch (Exception ignored) {
             return fallback;
         }

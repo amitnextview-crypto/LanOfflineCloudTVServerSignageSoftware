@@ -30,6 +30,8 @@ public class BootReceiver extends BroadcastReceiver {
     private static final String KEY_AUTO_REOPEN_MANUAL_OFF = "auto_reopen_manual_off";
     private static final String ACTION_LOCKED_BOOT_COMPLETED = "android.intent.action.LOCKED_BOOT_COMPLETED";
     private static final String ACTION_QUICKBOOT_POWERON = "android.intent.action.QUICKBOOT_POWERON";
+    private static final String ACTION_HTC_QUICKBOOT_POWERON = "com.htc.intent.action.QUICKBOOT_POWERON";
+    private static final String ACTION_REBOOT = "android.intent.action.REBOOT";
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -38,7 +40,9 @@ public class BootReceiver extends BroadcastReceiver {
         if (Intent.ACTION_BOOT_COMPLETED.equals(action)
             || ACTION_LOCKED_BOOT_COMPLETED.equals(action)
             || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
-            || ACTION_QUICKBOOT_POWERON.equals(action)) {
+            || ACTION_QUICKBOOT_POWERON.equals(action)
+            || ACTION_HTC_QUICKBOOT_POWERON.equals(action)
+            || ACTION_REBOOT.equals(action)) {
 
             Log.d("BOOT", "Boot/package restart trigger received");
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

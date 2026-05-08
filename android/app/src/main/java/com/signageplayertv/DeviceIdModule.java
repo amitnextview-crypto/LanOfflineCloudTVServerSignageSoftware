@@ -13,6 +13,8 @@ import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.os.Build;
+import android.os.Environment;
+import android.os.PowerManager;
 import android.os.StatFs;
 import android.app.Activity;
 import android.content.ClipData;
@@ -187,6 +189,103 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
         }
     }
 
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    public boolean hasManageExternalStoragePermission() {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                return true;
+            }
+            return Environment.isExternalStorageManager();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    public boolean isIgnoringBatteryOptimizations() {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                return true;
+            }
+            Context context = reactContext.getApplicationContext();
+            PowerManager powerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            return powerManager == null || powerManager.isIgnoringBatteryOptimizations(context.getPackageName());
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    @ReactMethod
+    public void openIgnoreBatteryOptimizationSettings() {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+            Context context = reactContext.getApplicationContext();
+            Intent intent = new Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + context.getPackageName())
+            );
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+        } catch (Exception ignored) {
+            try {
+                Intent fallback = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                reactContext.getApplicationContext().startActivity(fallback);
+            } catch (Exception ignoredAgain) {
+                openAppDetailsSettings();
+            }
+        }
+    }
+
+    @ReactMethod
+    public void openManageAllFilesSettings() {
+        try {
+            Context context = reactContext.getApplicationContext();
+            Intent intent;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                intent = new Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:" + context.getPackageName())
+                );
+            } else {
+                intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.parse("package:" + context.getPackageName()));
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+        } catch (Exception firstError) {
+            try {
+                Intent fallback = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                reactContext.getApplicationContext().startActivity(fallback);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    @ReactMethod
+    public void openManageAllFilesGlobalSettings() {
+        try {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            reactContext.getApplicationContext().startActivity(intent);
+        } catch (Exception ignored) {
+            openAppDetailsSettings();
+        }
+    }
+
+    @ReactMethod
+    public void openAppDetailsSettings() {
+        try {
+            Context context = reactContext.getApplicationContext();
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.parse("package:" + context.getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+        } catch (Exception ignored) {
+        }
+    }
+
     @ReactMethod
     public void openOverlaySettings() {
         try {
@@ -198,6 +297,7 @@ public class DeviceIdModule extends ReactContextBaseJavaModule implements Activi
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             context.startActivity(intent);
         } catch (Exception ignored) {
+            openAppDetailsSettings();
         }
     }
 

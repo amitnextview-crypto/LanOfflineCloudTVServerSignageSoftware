@@ -45,6 +45,7 @@ import java.util.concurrent.Executors;
 public class UsbManagerModule extends ReactContextBaseJavaModule {
     private static final String TAG = "UsbManagerModule";
     private static final long USB_DEBOUNCE_MS = 250L;
+    private static final long USB_MOUNT_SETTLE_RESCAN_MS = 2000L;
     private static final String ADS_DIR_NAME = "Ads";
     private static final List<String> SUPPORTED_EXTENSIONS = Arrays.asList(
             ".mp4",
@@ -113,6 +114,12 @@ public class UsbManagerModule extends ReactContextBaseJavaModule {
             public void onReceive(Context context, Intent intent) {
                 String action = intent != null ? intent.getAction() : "";
                 scheduleScan(String.valueOf(action == null ? "usb-event" : action));
+                if (Intent.ACTION_MEDIA_MOUNTED.equals(action) || Intent.ACTION_MEDIA_CHECKING.equals(action)) {
+                    mainHandler.postDelayed(
+                            () -> scheduleScan(String.valueOf(action == null ? "usb-settle" : action) + "-settled"),
+                            USB_MOUNT_SETTLE_RESCAN_MS
+                    );
+                }
             }
         };
 
